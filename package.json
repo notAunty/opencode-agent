@@ -1,0 +1,30 @@
+{
+  "name": "octg",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/src/index.js", "./rpc": "./dist/src/rpc.js" },
+  "files": ["dist/src", "README.md", "docs.md"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node --import tsx --test test/*.test.ts",
+    "verify": "npm run check && npm test && npm run build"
+  },
+  "peerDependencies": { "@opencode/plugin": ">=2.0.22 <3" },
+  "dependencies": {
+    "@chat-adapter/discord": "4.41.1",
+    "@chat-adapter/slack": "4.41.1",
+    "@chat-adapter/telegram": "4.41.1",
+    "@chat-adapter/state-redis": "4.41.1",
+    "chat": "4.41.1",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.22",
+    "@types/node": "26.6.4",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.octg/
+MEMORY.md
+TASKS/
+opencode-data/
+opencode-config/
+workspaces/
+v0/
+.claude/
+opencode-tools/
