@@ -23,7 +23,7 @@ export const nativeID = (prefix: "msg" | "ses", key: string): string => `${prefi
 export class GodService {
   private lock = new Serial()
   constructor(private storage: Storage, private sessions: Sessions, private messenger: Messenger,
-    private now = Date.now, private recoveryEnabled = false) {}
+    private now = Date.now, private recoveryEnabled = false, private namespace = "octg") {}
   private async read(): Promise<State> {
     const value = await this.storage.get("state/v1")
     return value === undefined ? { version: 1, gods: [], pending: [], notices: [], seen: {}, recoveries: [] } : stateSchema.parse(value)
@@ -55,7 +55,7 @@ export class GodService {
       const state = await this.read()
       if (state.gods.some(g => g.id === input.id)) throw new Error("God ID already exists")
       if (input.sessionID && state.gods.some(g => g.sessionID === input.sessionID)) throw new Error("Session already belongs to a God thread")
-      const sessionID = input.sessionID ?? nativeID("ses", `god:${input.id}`)
+      const sessionID = input.sessionID ?? nativeID("ses", `god:${this.namespace}:${input.id}`)
       if (input.sessionID) await this.sessions.get(sessionID)
       else {
         // A failed registry write can be recovered without creating an orphan second session
@@ -97,7 +97,7 @@ export class GodService {
       await this.save(state)
     })
   }
-  accept(id: string, text: string, key = randomUUID(), actor?: string, files: FileInput[] = []): Promise<void> {
+  accept(id: string, text: string, key: string = randomUUID(), actor?: string, files: FileInput[] = []): Promise<void> {
     if (text.length > 32_000 || files.length > 8) throw new Error("Prompt is too large")
     return this.lock.run(async () => {
       const state = await this.read(); const god = this.find(state, id, actor)
@@ -114,6 +114,13 @@ export class GodService {
     // Native admission, not the local staging queue, is the timer's durable completion boundary
     const god = await this.get(id)
     await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `timer:${id}:${timerID}`), text: `[Scheduled wake ${timerID}]\n${text}` })
+  }
+  taskOutcome(id: string, childSessionID: string, outcome: string, updated: number): Promise<void> {
+    return this.lock.run(async () => {
+      const state = await this.read(); const god = this.find(state, id)
+      this.notice(state, god, `Background task ${childSessionID}: ${outcome}. Details remain in the native OpenCode child session`, `child:${childSessionID}:${updated}:${outcome}`)
+      await this.save(state)
+    })
   }
   private notice(state: State, god: God, text: string, key: string): void {
     for (const conversation of god.conversations) {
@@ -218,6 +225,8 @@ export class GodService {
         const state = await this.read(); const current = this.find(state, god.id)
         for (const message of messages) {
           if (message.type !== "assistant" || !message.time?.completed || message.time.created < current.createdAt) continue
+          if (state.seen[`processed:${message.id}`]) continue
+          state.seen[`processed:${message.id}`] = this.now()
           if (message.error) this.notice(state, current, errorNotice(message.error.status, message.error.type), `terminal:${message.id}`)
           else if (message.finish !== "tool-calls") {
             const text = message.content?.filter(c => c.type === "text").map(c => c.text ?? "").join("\n").trim()

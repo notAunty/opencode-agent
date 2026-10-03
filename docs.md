@@ -101,6 +101,6 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 
 - Seed commit: `8222380`, exactly the three required documents, on orphan branch `v2`
 - Domain interfaces, God registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
-- OpenCode and Chat SDK wiring, container verification, and integration fixtures pending at this checkpoint
-- Browser API research is running read-only in a background `gpt-6.1-sol#low` agent; browser support must remain opt-in with no host activation
+- OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented; Docker verification is in progress
+- Browser research completed: prefer native V2 browser tools, with disabled-by-default Playwriter MCP for existing local Chrome; no host activation
 - Do not use ignored V1 `node_modules`, `.env`, configuration, or data when resuming

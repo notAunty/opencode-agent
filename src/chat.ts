@@ -1,0 +1,178 @@
+import { createServer, type Server } from "node:http"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { pathToFileURL } from "node:url"
+import { createHash } from "node:crypto"
+import { Chat, type Adapter, type Message, type Thread, type WebhookOptions } from "chat"
+import { createSlackAdapter } from "@chat-adapter/slack"
+import { createTelegramAdapter } from "@chat-adapter/telegram"
+import { createDiscordAdapter } from "@chat-adapter/discord"
+import { createRedisState } from "@chat-adapter/state-redis"
+import type { FileInput, Messenger } from "./contracts.js"
+import type { GodService } from "./service.js"
+import type { Timers, TimerWhen } from "./timers.js"
+
+export interface ChatOptions {
+  enabled: boolean
+  port: number
+  host: string
+  platforms: ("slack" | "telegram" | "discord")[]
+  discordGateway: boolean
+}
+
+function required(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`Missing environment variable ${name}`)
+  return value
+}
+export function timerWhen(value: { delayMs?: number; at?: string }): TimerWhen {
+  if ((value.delayMs === undefined) === (value.at === undefined)) throw new Error("Specify exactly one delayMs or timezone-aware at")
+  return value.delayMs !== undefined ? { delayMs: value.delayMs } : { at: value.at! }
+}
+
+export class ChatRouter {
+  constructor(private service: GodService, private timers: Timers, private directory: string) {}
+  async handle(thread: Pick<Thread, "id" | "post" | "subscribe">, message: Message): Promise<void> {
+    if (message.author.isBot !== false || message.author.isMe || message.author.isSystem) return
+    const platform = thread.id.split(":")[0]
+    if (!["telegram", "slack", "discord"].includes(platform ?? "")) return
+    const actor = `${platform}:${message.author.userId}`
+    const text = message.text.trim()
+    try {
+      if (text.startsWith("!god ")) {
+        const god = await this.service.link(text.slice(5).trim(), thread.id, actor)
+        await thread.subscribe()
+        await thread.post(`Linked to ${god.id}. Session: ${god.sessionID}. Everyone in this conversation can read its replies`)
+        return
+      }
+      const god = await this.service.byConversation(thread.id, actor)
+      if (text === "!status") { await thread.post(JSON.stringify(await this.service.status(god.id, actor))); return }
+      if (text === "!timers") { await thread.post(JSON.stringify(await this.timers.list(god.id))); return }
+      if (text.startsWith("!cancel ")) { await thread.post(await this.timers.cancel(god.id, text.slice(8).trim()) ? "Timer cancelled" : "Timer not found"); return }
+      if (text === "!cancel-recovery") { await this.service.cancelRecovery(god.id, actor); await thread.post("Recovery cancelled"); return }
+      if (text === "!stop") { await this.service.stop(god.id, actor); await thread.post("Agent interrupted; timers remain scheduled"); return }
+      if (text === "!retry") { await this.service.retry(god.id, actor); await thread.post("Saved inbox will be retried"); return }
+      if (text === "!unlink") { await this.service.unlink(god.id, thread.id, actor); await thread.post("Conversation unlinked"); return }
+      if (text.startsWith("!wake ")) {
+        const separator = text.indexOf(" ", 6)
+        if (separator < 0) throw new Error("Use !wake <seconds|ISO timestamp> <prompt>")
+        const time = text.slice(6, separator)
+        const when = /^\d+(\.\d+)?$/.test(time) ? { delayMs: Number(time) * 1000 } : { at: time }
+        const timer = await this.timers.create(god.id, text.slice(separator + 1), timerWhen(when))
+        await thread.post(`Timer ${timer.id}: ${new Date(timer.dueAt).toISOString()}`)
+        return
+      }
+      if (text.startsWith("!")) { await thread.post("Commands: !god <id>, !status, !wake <seconds|ISO time> <prompt>, !timers, !cancel <id>, !cancel-recovery, !stop, !retry, !unlink"); return }
+      // Authorization precedes adapter-controlled download, avoiding unauthorized file and URL fetches
+      const files = await this.attachments(message)
+      await this.service.accept(god.id, text || "Please inspect the attached files", `chat:${thread.id}:${message.id}`, actor, files)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Request failed"
+      const safe = /access denied|not linked|Specify|Use !wake|Invalid timer|Absolute time|too large|inbox is full|Unsupported attachment/.test(message)
+      await thread.post(safe ? message : "Request could not be saved. Check the OpenCode session and retry; no completed actions were replayed")
+    }
+  }
+  private async attachments(message: Message): Promise<FileInput[]> {
+    if (message.attachments.length > 8) throw new Error("Prompt is too large")
+    const files: FileInput[] = []
+    for (const attachment of message.attachments) {
+      if (attachment.size && attachment.size > 5 * 1024 * 1024) throw new Error("Attachment is too large")
+      const mime = attachment.mimeType ?? (attachment.type === "image" ? "image/jpeg" : "application/octet-stream")
+      if (!/^(image\/(png|jpeg|gif|webp)|application\/pdf|text\/plain)$/.test(mime)) throw new Error("Unsupported attachment type")
+      let bytes: Buffer
+      if (Buffer.isBuffer(attachment.data)) bytes = attachment.data
+      else if (attachment.data instanceof Blob) bytes = Buffer.from(await attachment.data.arrayBuffer())
+      else if (attachment.fetchData) {
+        const data = await attachment.fetchData()
+        bytes = Buffer.isBuffer(data) ? data : Buffer.from(data)
+      }
+      else throw new Error("Unsupported attachment download")
+      if (bytes.length > 5 * 1024 * 1024) throw new Error("Attachment is too large")
+      const path = join(this.directory, ".octg", "uploads", createHash("sha256").update(bytes).digest("hex"))
+      await mkdir(join(this.directory, ".octg", "uploads"), { recursive: true, mode: 0o700 })
+      await writeFile(path, bytes, { mode: 0o600 })
+      files.push({ uri: pathToFileURL(path).href, mime, filename: attachment.name ?? "attachment" })
+    }
+    return files
+  }
+}
+
+export class ChatBridge implements Messenger {
+  private bot?: Chat
+  private server?: Server
+  private stopping = false
+  private gateway = new AbortController()
+  private tasks = new Set<Promise<unknown>>()
+  private handler?: ChatRouter
+  constructor(private options: ChatOptions) {}
+  attach(router: ChatRouter): void { this.handler = router }
+  async post(conversation: string, text: string): Promise<void> {
+    if (!this.bot) throw new Error("Chat delivery is disabled")
+    // Conservative plain-text chunks work on all three adapters without invalid split Markdown
+    const chunks = Array.from(text)
+    for (let offset = 0; offset < chunks.length; offset += 1800) await this.bot.thread(conversation).post(chunks.slice(offset, offset + 1800).join(""))
+  }
+  private track(promise: Promise<unknown>): void {
+    this.tasks.add(promise)
+    void promise.catch(() => console.error("octg: chat handler failed; inspect the saved inbox")).finally(() => this.tasks.delete(promise))
+  }
+  async start(): Promise<void> {
+    if (!this.options.enabled) return
+    if (!this.handler) throw new Error("Chat router is not attached")
+    const adapters: Record<string, Adapter> = {}
+    for (const platform of this.options.platforms) {
+      if (platform === "slack") adapters.slack = createSlackAdapter({ mode: "webhook", botToken: required("SLACK_BOT_TOKEN"), signingSecret: required("SLACK_SIGNING_SECRET") })
+      if (platform === "telegram") adapters.telegram = createTelegramAdapter({ mode: "webhook", botToken: required("TELEGRAM_BOT_TOKEN"), secretToken: required("TELEGRAM_WEBHOOK_SECRET_TOKEN"), userName: required("TELEGRAM_BOT_USERNAME") })
+      if (platform === "discord") adapters.discord = createDiscordAdapter({ botToken: required("DISCORD_BOT_TOKEN"), applicationId: required("DISCORD_APPLICATION_ID"), publicKey: required("DISCORD_PUBLIC_KEY") })
+    }
+    this.bot = new Chat({ userName: "god", adapters, state: createRedisState({ url: required("REDIS_URL"), keyPrefix: "octg:" }), concurrency: "concurrent" })
+    const handler = async (thread: Thread, message: Message) => this.handler!.handle(thread, message)
+    this.bot.onNewMention(handler)
+    this.bot.onDirectMessage(handler)
+    this.bot.onSubscribedMessage(handler)
+    await this.bot.initialize()
+    this.server = createServer((request, response) => {
+      void (async () => {
+        const platform = request.url?.match(/^\/chat\/(slack|telegram|discord)$/)?.[1]
+        const webhook = platform && this.bot?.webhooks[platform]
+        if (request.method !== "POST" || !webhook || this.stopping) { response.writeHead(404).end(); return }
+        const parts: Buffer[] = []; let length = 0
+        for await (const part of request) {
+          length += Buffer.byteLength(part)
+          if (length > 2 * 1024 * 1024) { response.writeHead(413).end(); return }
+          parts.push(Buffer.from(part))
+        }
+        const headers = new Headers()
+        for (const [key, value] of Object.entries(request.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(",") : value)
+        const result = await webhook(new Request(`http://localhost${request.url}`, { method: "POST", headers, body: Buffer.concat(parts) }), { waitUntil: promise => this.track(promise) })
+        response.writeHead(result.status, Object.fromEntries(result.headers.entries())).end(Buffer.from(await result.arrayBuffer()))
+      })().catch(() => { if (!response.headersSent) response.writeHead(500); response.end(); console.error("octg: webhook failed") })
+    })
+    this.server.requestTimeout = 15_000
+    this.server.headersTimeout = 10_000
+    await new Promise<void>((resolve, reject) => { this.server!.once("error", reject); this.server!.listen(this.options.port, this.options.host, resolve) })
+    const discord = adapters.discord
+    if (discord && this.options.discordGateway) {
+      const adapter = discord as ReturnType<typeof createDiscordAdapter>
+      this.track((async () => {
+        while (!this.stopping) {
+          const work: Promise<unknown>[] = []
+          const options: WebhookOptions = { waitUntil: promise => work.push(promise) }
+          try {
+            await adapter.startGatewayListener(options, 600_000, this.gateway.signal)
+            await Promise.allSettled(work)
+          } catch {
+            if (!this.stopping) await new Promise<void>(resolve => { const timer = setTimeout(resolve, 10_000); this.gateway.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true }) })
+          }
+        }
+      })())
+    }
+  }
+  async stop(): Promise<void> {
+    this.stopping = true
+    this.gateway.abort()
+    if (this.server) { this.server.closeAllConnections(); await new Promise<void>(resolve => this.server!.close(() => resolve())) }
+    await Promise.allSettled(this.tasks)
+    await this.bot?.shutdown()
+  }
+}
