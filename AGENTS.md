@@ -9,6 +9,6 @@
 - Prefer OpenCode V2 native sessions, subagents, permissions, compaction, plugin tools, hooks, RPC, and storage
 - Use official V2 documentation, not V1 server/plugin interfaces
 - Comments explain enduring reasons, not implementation narration
-- God threads share the project directory and intentional long-term memory, but task notes and allowlists are isolated
-- External users must be authorized for the target God thread before prompts, files, commands, or replies are routed
+- Agent Sessions share the project directory and intentional long-term memory, but task notes and allowlists are isolated
+- External users must be authorized for the target Agent Session before prompts, files, commands, or replies are routed
 - Do not promise exactly-once external side effects or silently retry completed agent actions

@@ -6,14 +6,14 @@ Clean-room rewrite on `v2`, starting with exactly three tracked requirement docu
 
 Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review identified no documented durable wake timer in the inspected V1 files; the user supplied the V2 timer contract below
 
-## God threads
+## Agent Sessions
 
-- A God thread is an independent native primary OpenCode session
-- All God threads use the same project directory, personality, and shared long-term `MEMORY.md`
-- Short-term memory is `TASKS/<godId>.md`, loaded only for the corresponding God thread
+- An Agent Session is an independent native primary OpenCode session using the `main` agent profile
+- All Agent Sessions use the same project directory, personality, and shared long-term `MEMORY.md`
+- Short-term memory is `TASKS/<agentId>.md`, loaded only for the corresponding Agent Session
 - CLI, OpenCode web, and linked Chat SDK conversations address the same native session
-- Multiple conversations may be explicitly linked to a God thread
-- Every God thread has a mandatory, separate allowlist of platform-qualified identities, such as `telegram:123`, `slack:U123`, and `discord:123`
+- Multiple conversations may be explicitly linked to an Agent Session
+- Every Agent Session has a mandatory, separate allowlist of platform-qualified identities, such as `telegram:123`, `slack:U123`, and `discord:123`
 - A linked platform conversation is a disclosure boundary: anyone able to read that conversation can read posted replies, even if unable to prompt the agent. Owners must link only conversations with an appropriate audience
 - Local authenticated OpenCode clients are trusted owners. Chat senders cannot supply or impersonate this owner identity
 - Native foreground/background subagents perform delegated work with native permission enforcement; the primary stays available for new input
@@ -21,7 +21,7 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 ## Context management
 
 - Use native automatic compaction and a small recent-context retention budget
-- Inject bounded, current shared memory and only the target task notes into God model requests and compaction
+- Inject bounded, current shared memory and only the target task notes into main model requests and compaction
 - Keep goals, constraints, decisions, pending work, and worker references in short-term notes
 - Preserve long-term facts deliberately in `MEMORY.md`, not by appending every transcript
 - Do not introduce DCP until V2 compatibility and additional benefit are demonstrated
@@ -31,10 +31,10 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 - Plugin-managed, human-readable JSON, checked every minute
 - One-shot wakeups accept a delay or absolute UTC timestamp
-- Each timer has a stable ID, a God-thread owner, and a saved prompt
+- Each timer has a stable ID, an Agent Session owner, and a saved prompt
 - Timers survive process restart and fire when overdue after downtime
 - Due prompts enter the native inbox with queued delivery if the agent is busy
-- Users can list and cancel timers by ID within their authorized God thread
+- Users can list and cancel timers by ID within their authorized Agent Session
 - Durable admission uses stable native message IDs to avoid duplicate wake prompts on restart
 - Timer cancellation cannot retract a prompt already admitted to OpenCode
 
@@ -65,7 +65,7 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 ## Implementation boundaries
 
-OpenCode owns models, sessions, transcripts, tools, permissions, subagents, and compaction. The plugin owns God registry, allowlists, chat bindings, bounded memory injection, durable timer admission, notification outbox, and transport lifecycle
+OpenCode owns models, sessions, transcripts, tools, permissions, subagents, and compaction. The plugin owns Agent Session registry, allowlists, chat bindings, bounded memory injection, durable timer admission, notification outbox, and transport lifecycle
 
 Separate domain services from OpenCode and Chat SDK adapters. Use native plugin storage for registry/outbox and an atomic JSON file for timers. Run one plugin instance per project directory; multi-process scheduler leadership is outside this initial scope
 
@@ -75,8 +75,8 @@ No legacy data migration, new provider credential manager, custom model loop, be
 
 - Seed commit tracks exactly the three required Markdown files
 - All implementation and dependency files are new; no V1 artifacts are carried over
-- Two God sessions remain independent while intentionally sharing long-term memory
-- Per-God authorization covers linking, messages, attachments, timer creation/listing/cancellation, and notifications
+- Two Agent Sessions remain independent while intentionally sharing long-term memory
+- Per-session authorization covers linking, messages, attachments, timer creation/listing/cancellation, and notifications
 - CLI/web and linked platform conversations continue the same native session
 - Restart and duplicate-delivery tests demonstrate stable session and wake-prompt admission
 - Delayed/absolute timers, downtime, busy-session queueing, cancellation, and ownership pass tests
@@ -100,7 +100,20 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 ## Development checkpoint
 
 - Seed commit: `8222380`, exactly the three required documents, on orphan branch `v2`
-- Domain interfaces, God registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
-- OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented; Docker verification is in progress
+- Domain interfaces, Agent Session registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
+- OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented
+- Docker verification passes strict typechecking, 13 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
 - Browser research completed: prefer native V2 browser tools, with disabled-by-default Playwriter MCP for existing local Chrome; no host activation
 - Do not use ignored V1 `node_modules`, `.env`, configuration, or data when resuming
+
+## Operational limits
+
+- The plugin runs while its OpenCode project location is active; minute timers are not an OS scheduler. Due timers are admitted on restart
+- One process owns a project scheduler. Plugin storage is durable but is not a cross-process transactional queue
+- Native event subscriptions are live-only. Minute reconciliation reads active session context; replies already compacted during downtime cannot be reconstructed from that endpoint
+- External message delivery is at-least-once around crashes. Stable native admission IDs suppress repeated prompts, but platform posts can duplicate if a process dies after delivery and before persistence
+- Usage-reset recovery currently trusts a bounded future HTTP `Retry-After` value on a 429 response. No reset time is guessed. Recovery is opt-in, capped at three checks, waits for a fresh reset failure between successful admissions, and does not replay original work
+- Native permission requests are reported in chat; native question handling stays in CLI/web. Question-specific chat notifications are not implemented
+- Shared browser profiles and files are deliberate shared authority, not isolation between untrusted agents. Native browser availability depends on the chosen OpenCode runtime
+- Optional Playwriter is pinned, disabled, and denied by default. It requires an explicitly configured Chrome extension/relay outside development. Enabling it grants arbitrary browser automation against that profile; permission rules must be changed deliberately for trusted agents
+- Live Slack/Telegram/Discord delivery and Discord Gateway renewal need deployment smoke tests with dedicated bot credentials. Development never connects real bots

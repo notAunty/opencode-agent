@@ -1,6 +1,5 @@
 import { createServer, type Server } from "node:http"
 import { mkdir, writeFile } from "node:fs/promises"
-import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
 import { Chat, type Adapter, type Message, type Thread, type WebhookOptions } from "chat"
@@ -9,8 +8,10 @@ import { createTelegramAdapter } from "@chat-adapter/telegram"
 import { createDiscordAdapter } from "@chat-adapter/discord"
 import { createRedisState } from "@chat-adapter/state-redis"
 import type { FileInput, Messenger } from "./contracts.js"
-import type { GodService } from "./service.js"
+import type { AgentSessions } from "./service.js"
 import type { Timers, TimerWhen } from "./timers.js"
+import { uploadedFile } from "./transfers.js"
+import { projectPath } from "./files.js"
 
 export interface ChatOptions {
   enabled: boolean
@@ -31,7 +32,7 @@ export function timerWhen(value: { delayMs?: number; at?: string }): TimerWhen {
 }
 
 export class ChatRouter {
-  constructor(private service: GodService, private timers: Timers, private directory: string) {}
+  constructor(private service: AgentSessions, private timers: Timers, private directory: string, private changed: () => void = () => {}) {}
   async handle(thread: Pick<Thread, "id" | "post" | "subscribe">, message: Message): Promise<void> {
     if (message.author.isBot !== false || message.author.isMe || message.author.isSystem) return
     const platform = thread.id.split(":")[0]
@@ -39,8 +40,8 @@ export class ChatRouter {
     const actor = `${platform}:${message.author.userId}`
     const text = message.text.trim()
     try {
-      if (text.startsWith("!god ")) {
-        const god = await this.service.link(text.slice(5).trim(), thread.id, actor)
+      if (text.startsWith("!agent ")) {
+        const god = await this.service.link(text.slice(7).trim(), thread.id, actor)
         await thread.subscribe()
         await thread.post(`Linked to ${god.id}. Session: ${god.sessionID}. Everyone in this conversation can read its replies`)
         return
@@ -51,7 +52,7 @@ export class ChatRouter {
       if (text.startsWith("!cancel ")) { await thread.post(await this.timers.cancel(god.id, text.slice(8).trim()) ? "Timer cancelled" : "Timer not found"); return }
       if (text === "!cancel-recovery") { await this.service.cancelRecovery(god.id, actor); await thread.post("Recovery cancelled"); return }
       if (text === "!stop") { await this.service.stop(god.id, actor); await thread.post("Agent interrupted; timers remain scheduled"); return }
-      if (text === "!retry") { await this.service.retry(god.id, actor); await thread.post("Saved inbox will be retried"); return }
+      if (text === "!retry") { await this.service.retry(god.id, actor); this.changed(); await thread.post("Saved inbox will be retried"); return }
       if (text === "!unlink") { await this.service.unlink(god.id, thread.id, actor); await thread.post("Conversation unlinked"); return }
       if (text.startsWith("!wake ")) {
         const separator = text.indexOf(" ", 6)
@@ -62,10 +63,11 @@ export class ChatRouter {
         await thread.post(`Timer ${timer.id}: ${new Date(timer.dueAt).toISOString()}`)
         return
       }
-      if (text.startsWith("!")) { await thread.post("Commands: !god <id>, !status, !wake <seconds|ISO time> <prompt>, !timers, !cancel <id>, !cancel-recovery, !stop, !retry, !unlink"); return }
+      if (text.startsWith("!")) { await thread.post("Commands: !agent <id>, !status, !wake <seconds|ISO time> <prompt>, !timers, !cancel <id>, !cancel-recovery, !stop, !retry, !unlink"); return }
       // Authorization precedes adapter-controlled download, avoiding unauthorized file and URL fetches
       const files = await this.attachments(message)
       await this.service.accept(god.id, text || "Please inspect the attached files", `chat:${thread.id}:${message.id}`, actor, files)
+      this.changed()
     } catch (error) {
       const message = error instanceof Error ? error.message : "Request failed"
       const safe = /access denied|not linked|Specify|Use !wake|Invalid timer|Absolute time|too large|inbox is full|Unsupported attachment/.test(message)
@@ -88,8 +90,9 @@ export class ChatRouter {
       }
       else throw new Error("Unsupported attachment download")
       if (bytes.length > 5 * 1024 * 1024) throw new Error("Attachment is too large")
-      const path = join(this.directory, ".octg", "uploads", createHash("sha256").update(bytes).digest("hex"))
-      await mkdir(join(this.directory, ".octg", "uploads"), { recursive: true, mode: 0o700 })
+      const uploads = await projectPath(this.directory, ".octg", "uploads")
+      const path = await projectPath(this.directory, ".octg", "uploads", createHash("sha256").update(bytes).digest("hex"))
+      await mkdir(uploads, { recursive: true, mode: 0o700 })
       await writeFile(path, bytes, { mode: 0o600 })
       files.push({ uri: pathToFileURL(path).href, mime, filename: attachment.name ?? "attachment" })
     }
@@ -106,8 +109,9 @@ export class ChatBridge implements Messenger {
   private handler?: ChatRouter
   constructor(private options: ChatOptions) {}
   attach(router: ChatRouter): void { this.handler = router }
-  async post(conversation: string, text: string): Promise<void> {
+  async post(conversation: string, text: string, file?: FileInput): Promise<void> {
     if (!this.bot) throw new Error("Chat delivery is disabled")
+    if (file) { await this.bot.thread(conversation).post({ raw: text, files: [await uploadedFile(file)] }); return }
     // Conservative plain-text chunks work on all three adapters without invalid split Markdown
     const chunks = Array.from(text)
     for (let offset = 0; offset < chunks.length; offset += 1800) await this.bot.thread(conversation).post(chunks.slice(offset, offset + 1800).join(""))
@@ -125,7 +129,7 @@ export class ChatBridge implements Messenger {
       if (platform === "telegram") adapters.telegram = createTelegramAdapter({ mode: "webhook", botToken: required("TELEGRAM_BOT_TOKEN"), secretToken: required("TELEGRAM_WEBHOOK_SECRET_TOKEN"), userName: required("TELEGRAM_BOT_USERNAME") })
       if (platform === "discord") adapters.discord = createDiscordAdapter({ botToken: required("DISCORD_BOT_TOKEN"), applicationId: required("DISCORD_APPLICATION_ID"), publicKey: required("DISCORD_PUBLIC_KEY") })
     }
-    this.bot = new Chat({ userName: "god", adapters, state: createRedisState({ url: required("REDIS_URL"), keyPrefix: "octg:" }), concurrency: "concurrent" })
+    this.bot = new Chat({ userName: "agent", adapters, state: createRedisState({ url: required("REDIS_URL"), keyPrefix: "octg:" }), concurrency: "concurrent" })
     const handler = async (thread: Thread, message: Message) => this.handler!.handle(thread, message)
     this.bot.onNewMention(handler)
     this.bot.onDirectMessage(handler)

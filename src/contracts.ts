@@ -21,10 +21,11 @@ export interface Sessions {
   context(sessionID: string): Promise<readonly NativeMessage[]>
   compact(sessionID: string): Promise<void>
   interrupt(sessionID: string): Promise<void>
+  approvals?(sessionID: string): Promise<readonly { id: string }[]>
 }
-export interface Messenger { post(conversation: string, text: string): Promise<void> }
+export interface Messenger { post(conversation: string, text: string, file?: FileInput): Promise<void> }
 
-export interface God {
+export interface AgentSession {
   id: string
   sessionID: string
   allowedUsers: string[]
@@ -48,11 +49,12 @@ export interface Notice {
   text: string
   dueAt: number
   attempts: number
+  file?: FileInput
 }
-export interface Recovery { godId: string; dueAt: number; revision: number; attempts: number }
+export interface Recovery { godId: string; dueAt: number; revision: number; attempts: number; awaitingResult?: boolean }
 export interface State {
   version: 1
-  gods: God[]
+  gods: AgentSession[]
   pending: Pending[]
   notices: Notice[]
   seen: Record<string, number>

@@ -1,13 +1,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile } from "node:fs/promises"
+import { mkdtemp, readFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Timers } from "../src/timers.js"
 import { MemoryFiles } from "../src/files.js"
 import { resetTime } from "../src/errors.js"
 
-test("durable one-shot timers isolate Gods, cancel and retry failed admission", async () => {
+test("durable one-shot timers isolate Agent Sessions, cancel and retry failed admission", async () => {
   const directory = await mkdtemp(join(tmpdir(), "octg-")); const path = join(directory, "timers.json")
   let now = 1000
   let timers = new Timers(path, () => now)
@@ -23,15 +23,32 @@ test("durable one-shot timers isolate Gods, cancel and retry failed admission", 
   assert.deepEqual(ids, [a.id]); assert.equal((await timers.list("alice")).length, 0)
   assert.equal(JSON.parse(await readFile(path, "utf8")).version, 1)
 })
-test("shared memory is bounded and task files are God-specific", async () => {
+test("shared memory is bounded and task files are Agent Session-specific", async () => {
   const directory = await mkdtemp(join(tmpdir(), "octg-memory-")); const memory = new MemoryFiles(directory, 20)
   await memory.save("shared"); await memory.save("alice task", "alice"); await memory.save("bob task", "bob")
   assert.match(await memory.context("alice"), /shared/); assert.doesNotMatch(await memory.context("alice"), /bob task/)
   await assert.rejects(memory.save("x".repeat(21)), /budget/)
   assert.throws(() => memory.path("../bob"), /Invalid/)
+  const unsafe = await mkdtemp(join(tmpdir(), "octg-memory-symlink-"))
+  await symlink(directory, join(unsafe, "TASKS"))
+  await assert.rejects(new MemoryFiles(unsafe).save("escape", "alice"), /symlink/)
 })
 test("only bounded future Retry-After values authorize recovery", () => {
   assert.equal(resetTime(new Headers({ "retry-after": "60" }), 1000), 61_000)
   assert.equal(resetTime(new Headers({ "retry-after": "garbage" }), 1000), undefined)
   assert.equal(resetTime(new Headers({ "retry-after": "999999999" }), 1000), undefined)
+})
+test("a failed timer does not starve other Agent Session timers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "octg-timer-isolation-"))
+  const timers = new Timers(join(directory, "timers.json"), () => 1000)
+  await timers.create("alice", "offline", { delayMs: 0 })
+  await timers.create("bob", "online", { delayMs: 0 })
+  const admitted: string[] = []
+  await assert.rejects(timers.tick(async timer => {
+    if (timer.agentId === "alice") throw new Error("offline")
+    admitted.push(timer.agentId)
+  }), AggregateError)
+  assert.deepEqual(admitted, ["bob"])
+  assert.equal((await timers.list("alice")).length, 1)
+  assert.equal((await timers.list("bob")).length, 0)
 })

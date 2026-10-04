@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { GodService } from "../src/service.js"
+import { AgentSessions } from "../src/service.js"
 import type { Json, NativeMessage, Sessions, Storage } from "../src/contracts.js"
 
 function fixture() {
@@ -8,19 +8,19 @@ function fixture() {
   const storage: Storage = { get: async key => structuredClone(values.get(key)), set: async (key, value: Json) => { values.set(key, structuredClone(value)) } }
   const prompts: unknown[] = []; const replies: unknown[] = []; const created = new Map<string, { id: string }>()
   const messages: NativeMessage[] = []
-  let failed = false; let now = 1000
+  let failed = false; let failedSession: string | undefined; let now = 1000
   const sessions: Sessions = {
     get: async id => { const value = created.get(id); if (!value) throw new Error("missing"); return value },
     create: async input => { created.set(input.id, { id: input.id }); return { id: input.id } },
-    prompt: async input => { if (failed) throw new Error("offline"); prompts.push(input) },
+    prompt: async input => { if (failed || input.sessionID === failedSession) throw new Error("offline"); prompts.push(input) },
     context: async () => messages, compact: async () => {}, interrupt: async () => {},
   }
   const messenger = { post: async (conversation: string, text: string) => { replies.push({ conversation, text }) } }
-  const make = () => new GodService(storage, sessions, messenger, () => now, true)
-  return { make, prompts, replies, messages, created, fail: (value: boolean) => { failed = value }, advance: (ms: number) => { now += ms } }
+  const make = () => new AgentSessions(storage, sessions, messenger, () => now, true)
+  return { make, prompts, replies, messages, created, fail: (value: boolean) => { failed = value }, failSession: (id: string) => { failedSession = id }, advance: (ms: number) => { now += ms } }
 }
 
-test("each God has its own authorization and linked native session", async () => {
+test("each Agent Session has its own authorization and linked native session", async () => {
   const f = fixture(); const service = f.make()
   const a = await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
   const b = await service.create({ id: "bob", allowedUsers: ["telegram:2"] })
@@ -63,4 +63,30 @@ test("explicit reset recovery is bounded and cancelled by new user input", async
   f.advance(2000); await service.tick(); assert.equal(f.prompts.length, 1)
   await service.accept("alice", "new work", "user", "telegram:1"); await service.tick()
   f.advance(900_000); await service.tick(); assert.equal(f.prompts.length, 2)
+})
+test("recovery waits for a fresh reset error instead of waking a busy agent repeatedly", async () => {
+  const f = fixture(); const service = f.make()
+  const god = await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  await service.failure(god.sessionID, 429, undefined, 2000)
+  f.advance(2000); await service.tick()
+  f.advance(900_000); await service.tick(); assert.equal(f.prompts.length, 1)
+  await service.failure(god.sessionID, 429, undefined, 1_000_000)
+  f.advance(900_000); await service.tick(); assert.equal(f.prompts.length, 2)
+  await service.failure(god.sessionID, 429, undefined, 2_000_000)
+  f.advance(900_000); await service.tick(); assert.equal(f.prompts.length, 3)
+  await service.failure(god.sessionID, 429, undefined, 3_000_000)
+  f.advance(900_000); await service.tick(); assert.equal(f.prompts.length, 3)
+})
+test("failed Agent Session admission does not block others; revoked file notices are dropped", async () => {
+  const f = fixture(); const service = f.make()
+  const alice = await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  await service.create({ id: "bob", allowedUsers: ["telegram:2"] })
+  await service.link("alice", "telegram:chat", "telegram:1")
+  await service.sendFile("alice", { uri: "file:///synthetic.png", mime: "image/png" }, "screenshot")
+  await service.setAllowlist("alice", ["telegram:3"])
+  await service.tick(); assert.equal(f.replies.length, 0)
+  f.failSession(alice.sessionID)
+  await service.accept("alice", "first", "a"); await service.accept("bob", "second", "b")
+  await service.tick(); assert.equal(f.prompts.length, 1)
+  assert.match(JSON.stringify(f.prompts), /second/)
 })

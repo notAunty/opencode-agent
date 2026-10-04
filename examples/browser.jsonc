@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "playwriter": {
+        "type": "local",
+        "command": ["npx", "-y", "playwriter@0.7.0"],
+        "disabled": true,
+        "codemode": true
+      }
+    }
+  },
+  "permissions": [
+    { "action": "browser", "resource": "*", "effect": "deny" },
+    { "action": "playwriter_*", "resource": "*", "effect": "deny" }
+  ]
+}

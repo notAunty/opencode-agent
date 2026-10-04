@@ -1,12 +1,30 @@
-import { mkdir, readFile, rename, writeFile, open, lstat } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { mkdir, readFile, rename, open, lstat, realpath } from "node:fs/promises"
+import { dirname, join, relative, isAbsolute, sep } from "node:path"
 import { randomUUID } from "node:crypto"
 
 export const godID = /^[a-z][a-z0-9_-]{0,63}$/
 
+export async function projectPath(directory: string, ...parts: string[]): Promise<string> {
+  const root = await realpath(directory)
+  const path = join(root, ...parts)
+  const child = relative(root, path)
+  if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) throw new Error("Managed path must remain in the project")
+  let current = root
+  for (const part of child.split(sep).filter(Boolean)) {
+    current = join(current, part)
+    try {
+      if ((await lstat(current)).isSymbolicLink()) throw new Error("Managed paths cannot contain symlinks")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    }
+  }
+  return path
+}
+
 export async function readBounded(path: string, maxBytes: number): Promise<string> {
   try {
-    if ((await lstat(path)).isSymbolicLink()) throw new Error("Managed files cannot be symlinks")
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error("Managed memory must be a regular file, not a symlink")
     const file = await open(path, "r")
     try {
       const bytes = Buffer.alloc(maxBytes + 1)
@@ -36,18 +54,20 @@ export async function atomicWrite(path: string, text: string): Promise<void> {
 export class MemoryFiles {
   constructor(private directory: string, private maxBytes = 12_000) {}
   path(id?: string): string {
-    if (id && !godID.test(id)) throw new Error("Invalid God ID")
+    if (id && !godID.test(id)) throw new Error("Invalid Agent Session ID")
     return id ? join(this.directory, "TASKS", `${id}.md`) : join(this.directory, "MEMORY.md")
   }
   async context(id: string): Promise<string> {
     const [memory, task] = await Promise.all([
-      readBounded(this.path(), this.maxBytes), readBounded(this.path(id), this.maxBytes),
+      projectPath(this.directory, "MEMORY.md").then(path => readBounded(path, this.maxBytes)),
+      projectPath(this.directory, "TASKS", `${id}.md`).then(path => readBounded(path, this.maxBytes)),
     ])
     return `Shared long-term memory:\n${memory || "(empty)"}\n\nTask notes for ${id}:\n${task || "(empty)"}`
   }
   async save(text: string, id?: string): Promise<void> {
     if (Buffer.byteLength(text) > this.maxBytes) throw new Error("Memory exceeds its byte budget; summarize first")
-    await atomicWrite(this.path(id), text)
+    this.path(id)
+    await atomicWrite(await projectPath(this.directory, ...(id ? ["TASKS", `${id}.md`] : ["MEMORY.md"])), text)
   }
 }
 
