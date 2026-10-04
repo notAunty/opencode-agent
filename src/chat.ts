@@ -7,12 +7,13 @@ import { createSlackAdapter } from "@chat-adapter/slack"
 import { createTelegramAdapter } from "@chat-adapter/telegram"
 import { createDiscordAdapter } from "@chat-adapter/discord"
 import { createRedisState } from "@chat-adapter/state-redis"
-import type { FileInput, Messenger } from "./contracts.js"
+import type { FileInput } from "./contracts.js"
 import type { AgentSessions } from "./service.js"
 import type { Timers, TimerWhen } from "./timers.js"
 import { uploadedFile } from "./transfers.js"
 import { projectPath } from "./files.js"
 import { chatCommands, registerTelegramCommands } from "./commands.js"
+import type { MessagingTransport } from "./transport.js"
 
 export interface ChatOptions {
   enabled: boolean
@@ -21,6 +22,7 @@ export interface ChatOptions {
   platforms: ("slack" | "telegram" | "discord")[]
   discordGateway: boolean
   telegramRegisterCommands?: boolean
+  telegramTransport?: "polling" | "webhook"
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -42,7 +44,7 @@ export class ChatRouter {
       author: event.user, text: `!${command}${event.text ? ` ${event.text}` : ""}`, id: "slash-command", attachments: [],
     })
   }
-  async handle(thread: Pick<Thread, "id" | "post" | "subscribe">, message: Pick<Message, "author" | "text" | "id" | "attachments">): Promise<void> {
+  async handle(thread: { id: string; post(text: string): Promise<unknown>; subscribe(): Promise<unknown> }, message: Pick<Message, "author" | "text" | "id" | "attachments">): Promise<void> {
     if (message.author.isBot !== false || message.author.isMe || message.author.isSystem) return
     const platform = thread.id.split(":")[0]
     if (!["telegram", "slack", "discord"].includes(platform ?? "")) return
@@ -118,7 +120,7 @@ export class ChatRouter {
   }
 }
 
-export class ChatBridge implements Messenger {
+export class ChatBridge implements MessagingTransport {
   private bot?: Chat
   private server?: Server
   private stopping = false

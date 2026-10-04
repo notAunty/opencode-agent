@@ -8,15 +8,15 @@ For example, keep a `research` session and a `planning` session in the same proj
 
 ## Quick start
 
-Start with Telegram. You need OpenCode with a working model provider, Redis, a Telegram bot, and an HTTPS URL forwarding to the plugin's port `8787`
+Start with Telegram. You need OpenCode with a working model provider and a Telegram bot. Telegraf long polling needs neither Redis nor a public HTTPS endpoint
 
 1. Install the plugin:
    ```sh
     opencode plugin add @notaunty/opencode-agent@latest
    ```
 2. Create a directory for your agents, such as `~/agents`. Copy [examples/opencode.jsonc](examples/opencode.jsonc) into it as `opencode.jsonc`. Set `envFile` to `.env`, `chat.enabled` to `true`, and `chat.platforms` to `["telegram"]`, then open OpenCode in that directory
-3. Put `REDIS_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN` in the project's `.env`, then reload the project plugin
-4. [Register the bot's webhook](https://core.telegram.org/bots/api#setwebhook) as `https://your-host/chat/telegram`, with `secret_token` matching `TELEGRAM_WEBHOOK_SECRET_TOKEN`
+3. Put `TELEGRAM_BOT_TOKEN` in the project's `.env`, then reload the project plugin
+4. Keep `chat.telegramTransport` set to `"polling"`. Use a bot without an existing webhook; polling refuses to change one. Only one process may poll the same bot
 5. From an authenticated OpenCode client in that project, create a session using your Telegram user ID:
    ```sh
    opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
@@ -89,18 +89,18 @@ An already-running shared server cannot inherit a new client shell's environment
 
 ### Chat integrations
 
-Set `chat.enabled` to `true`, select your configured platforms in `chat.platforms`, and provide `REDIS_URL`. Chat is disabled by default. The listener defaults to `127.0.0.1:8787`
+Set `chat.enabled` to `true` and select platforms in `chat.platforms`. Chat is disabled by default. Chat SDK webhook adapters require `REDIS_URL` and use the listener at `127.0.0.1:8787`; Telegram-only polling uses neither
 
 Expose webhook routes through HTTPS and register them with each platform yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
 
 #### Telegram
 
 - Enable `telegram` in `chat.platforms`
-- Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`
-- Register `/chat/telegram` as the webhook, using the same secret token
-- Uses webhook mode, not polling
+- Default `chat.telegramTransport: "polling"` uses a separate Telegraf transport with only `TELEGRAM_BOT_TOKEN`
+- Polling uses outbound requests only, preserves existing webhooks, and stops gracefully with the plugin. Use one polling process per bot
+- Set `chat.telegramTransport: "webhook"` to retain the Chat SDK adapter. This mode also needs `REDIS_URL`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`; register `/chat/telegram` with that secret yourself
 - Commands work without a menu. Set `chat.telegramRegisterCommands` to `true` to publish the menu programmatically through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands) on startup
-- Registration replaces the bot's default, language-neutral menu with the commands above. It is disabled by default, does not alter webhooks, and does not grant session access. Disable it if another application manages the same bot's menu
+- Registration replaces the bot's default, language-neutral menu with the commands above. It is enabled by default, does not alter webhooks, and does not grant session access. Disable it if another application manages the same bot's menu
 
 #### Slack
 

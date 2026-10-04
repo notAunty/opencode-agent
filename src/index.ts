@@ -3,7 +3,8 @@ import type { Session } from "@opencode/schema/session"
 import type { SessionMessage } from "@opencode/schema/session-message"
 import type { Agent } from "@opencode/schema/agent"
 import { z } from "zod"
-import { ChatBridge, ChatRouter, timerWhen } from "./chat.js"
+import { ChatRouter, timerWhen } from "./chat.js"
+import { Messaging } from "./messaging.js"
 import { MemoryFiles, projectPath } from "./files.js"
 import { AgentSessions } from "./service.js"
 import { Timers } from "./timers.js"
@@ -17,7 +18,8 @@ const optionsSchema = z.object({
   envFile: z.string().min(1).optional(),
   chat: z.object({ enabled: z.boolean().default(false), port: z.number().int().min(1024).max(65535).default(8787),
     host: z.string().default("127.0.0.1"), platforms: z.array(z.enum(["slack", "telegram", "discord"])).default([]),
-    discordGateway: z.boolean().default(false), telegramRegisterCommands: z.boolean().default(false) }).default({ enabled: false, port: 8787, host: "127.0.0.1", platforms: [], discordGateway: false, telegramRegisterCommands: false }),
+    discordGateway: z.boolean().default(false), telegramRegisterCommands: z.boolean().default(true),
+    telegramTransport: z.enum(["polling", "webhook"]).default("polling") }).default({ enabled: false, port: 8787, host: "127.0.0.1", platforms: [], discordGateway: false, telegramRegisterCommands: true, telegramTransport: "polling" }),
   usageResetRecovery: z.boolean().default(false),
   memoryMaxBytes: z.number().int().min(1024).max(32_000).default(12_000),
 })
@@ -29,7 +31,7 @@ export default Plugin.define({
   async setup(ctx) {
     const options = optionsSchema.parse(ctx.options)
     const directory = ctx.location.directory
-    const bridge = new ChatBridge(options.chat, await environment(directory, options.envFile))
+    const bridge = new Messaging(options.chat, await environment(directory, options.envFile))
     const sessions: Sessions = {
       create: async input => ctx.session.create({ ...input, id: sid(input.id), agent: input.agent as Agent.ID }),
       get: async sessionID => {

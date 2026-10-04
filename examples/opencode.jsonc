@@ -10,7 +10,8 @@
           "port": 8787,
           "platforms": ["telegram", "slack", "discord"],
            "discordGateway": false,
-           "telegramRegisterCommands": false
+           "telegramTransport": "polling",
+           "telegramRegisterCommands": true
         },
         "usageResetRecovery": false,
         "memoryMaxBytes": 12000
