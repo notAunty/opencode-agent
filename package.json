@@ -1,13 +1,29 @@
 {
   "name": "@notaunty/opencode-agent",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "OpenCode V2 Agent Sessions with Vercel Chat SDK transports and durable wake timers",
-  "repository": { "type": "git", "url": "https://github.com/notAunty/opencode-agent" },
-  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/notAunty/opencode-agent"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "type": "module",
-  "exports": { ".": "./dist/src/index.js", "./rpc": "./dist/src/rpc.js" },
-  "files": ["dist/src", "scripts", "examples", "README.md", "docs.md"],
-  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./dist/src/index.js",
+    "./rpc": "./dist/src/rpc.js"
+  },
+  "files": [
+    "dist/src",
+    "scripts",
+    "examples",
+    "README.md",
+    "docs.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "build": "tsc",
@@ -18,21 +34,23 @@
     "prepublishOnly": "npm run verify",
     "publish:github": "npm publish --registry=https://npm.pkg.github.com"
   },
-  "peerDependencies": { "@opencode/plugin": ">=2.0.22 <3" },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.0.22 <3"
+  },
   "dependencies": {
+    "@chat-adapter/discord": "4.41.1",
+    "@chat-adapter/slack": "4.41.1",
+    "@chat-adapter/state-redis": "4.41.1",
+    "@chat-adapter/telegram": "4.41.1",
     "@opencode/client": "2.0.22",
     "@opencode/plugin": "2.0.22",
     "@opencode/schema": "2.0.22",
     "@slack/socket-mode": "3.1.0",
     "@slack/web-api": "8.2.0",
-    "@chat-adapter/discord": "4.41.1",
-    "@chat-adapter/slack": "4.41.1",
-    "@chat-adapter/telegram": "4.41.1",
-    "@chat-adapter/state-redis": "4.41.1",
+    "abort-controller": "3.0.0",
     "chat": "4.41.1",
     "dotenv": "18.0.5",
     "telegraf": "4.16.3",
-    "abort-controller": "3.0.0",
     "zod": "4.1.8"
   },
   "devDependencies": {
