@@ -1,0 +1,12 @@
+services:
+  opencode:
+    image: octg-v2-runtime-test
+    pull_policy: never
+    env_file: !reset []
+    ports: !reset []
+    restart: "no"
+  redis:
+    restart: "no"
+networks:
+  default:
+    internal: true

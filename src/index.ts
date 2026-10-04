@@ -11,8 +11,10 @@ import { resetTime } from "./errors.js"
 import { Octg } from "./rpc.js"
 import type { Sessions } from "./contracts.js"
 import { captureFile } from "./transfers.js"
+import { environment } from "./environment.js"
 
 const optionsSchema = z.object({
+  envFile: z.string().min(1).optional(),
   chat: z.object({ enabled: z.boolean().default(false), port: z.number().int().min(1024).max(65535).default(8787),
     host: z.string().default("127.0.0.1"), platforms: z.array(z.enum(["slack", "telegram", "discord"])).default([]),
     discordGateway: z.boolean().default(false) }).default({ enabled: false, port: 8787, host: "127.0.0.1", platforms: [], discordGateway: false }),
@@ -27,7 +29,7 @@ export default Plugin.define({
   async setup(ctx) {
     const options = optionsSchema.parse(ctx.options)
     const directory = ctx.location.directory
-    const bridge = new ChatBridge(options.chat)
+    const bridge = new ChatBridge(options.chat, await environment(directory, options.envFile))
     const sessions: Sessions = {
       create: async input => ctx.session.create({ ...input, id: sid(input.id), agent: input.agent as Agent.ID }),
       get: async sessionID => {

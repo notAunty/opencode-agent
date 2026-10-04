@@ -34,12 +34,56 @@ Native plugin tools: `octg_save_memory`, `octg_wake`, `octg_send_file`. The last
 
 The typed owner RPC contract is exported as `octg/rpc`. Methods include registry management, `prompt`, `status`, timers, `stop`, and `compact`; session-scoped inputs use `agentId`
 
+## Server deployment
+
+`Dockerfile` now defaults to the running OpenCode V2 service, not tests. `docker-compose.yml` includes Redis on Alpine with append-only persistence. OpenCode runs as a non-root user; workspace, native data/configuration, and Redis data use named volumes. No host project or secret directory is mounted
+
+Create a deployment `.env` from `.env.example`, fill only the credentials you need, then run:
+
+```sh
+docker compose up -d --build
+```
+
+Compose's `env_file` injects `.env` values into the OpenCode process; `REDIS_URL` is set to the internal Redis service. Redis is not published. OpenCode and webhook ports are published on host loopback only. Expose only webhook routes through your HTTPS ingress; do not expose the owner API without authentication
+
+The image seeds `/workspace/opencode.json` with chat disabled. Edit that file inside the container to enable your selected platforms, then restart the service. The workspace volume preserves configuration and memory. Image upgrades do not replace existing workspace configuration
+
+```sh
+docker compose exec opencode opencode api get '/api/plugin?location[directory]=/workspace'
+docker compose restart opencode
+```
+
+The authenticated health check activates the `/workspace` plugin, so timers run without an attached interactive client
+
+## Laptop environment
+
+Keep your dedicated agent directory separate from the installed plugin directory. In that agent directory, merge the example configuration and use the plugin's absolute package path
+
+To load that directory's `.env` before launching OpenCode, use the included launcher after building the package:
+
+```sh
+cd ~/agents
+node /absolute/path/to/octg/scripts/opencode-env.mjs --standalone
+```
+
+You can use a shell function for the usual `opencode` command without editing OpenCode's global configuration:
+
+```sh
+opencode() { node /absolute/path/to/octg/scripts/opencode-env.mjs --standalone "$@"; }
+```
+
+This parses `.env` as data, not executable shell code. Existing environment variables win. `--standalone` ensures a fresh private server inherits those values; an already-running shared server would not inherit a new client shell's environment. Use this function for interactive usage, not service-management commands
+
+Alternatively, plugin options `"envFile": ".env"` load chat credentials directly from the current project directory, even in a shared OpenCode service. This is opt-in, project-scoped, and does not mutate global `process.env` or configure model-provider credentials. The launcher loads all variables into the child OpenCode process instead. Changes require restarting the standalone/container process or reloading the project plugin, respectively
+
+Keep `.env` out of version control and restrict its file permissions. The example launcher/function is not installed into your shell automatically
+
 ## Verification
 
 All development verification runs in disposable containers without real credentials, host mounts, or bot connections:
 
 ```sh
-docker build -t octg-v2-test .
+docker build --target test -t octg-v2-test .
 docker run --rm --network none octg-v2-test
 docker run --rm --network none octg-v2-test timeout --kill-after=2s 60s node dist/test/native.js
 ```

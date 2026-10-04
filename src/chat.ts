@@ -21,8 +21,8 @@ export interface ChatOptions {
   discordGateway: boolean
 }
 
-function required(name: string): string {
-  const value = process.env[name]
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name]
   if (!value) throw new Error(`Missing environment variable ${name}`)
   return value
 }
@@ -107,7 +107,7 @@ export class ChatBridge implements Messenger {
   private gateway = new AbortController()
   private tasks = new Set<Promise<unknown>>()
   private handler?: ChatRouter
-  constructor(private options: ChatOptions) {}
+  constructor(private options: ChatOptions, private env: NodeJS.ProcessEnv = process.env) {}
   attach(router: ChatRouter): void { this.handler = router }
   async post(conversation: string, text: string, file?: FileInput): Promise<void> {
     if (!this.bot) throw new Error("Chat delivery is disabled")
@@ -125,11 +125,11 @@ export class ChatBridge implements Messenger {
     if (!this.handler) throw new Error("Chat router is not attached")
     const adapters: Record<string, Adapter> = {}
     for (const platform of this.options.platforms) {
-      if (platform === "slack") adapters.slack = createSlackAdapter({ mode: "webhook", botToken: required("SLACK_BOT_TOKEN"), signingSecret: required("SLACK_SIGNING_SECRET") })
-      if (platform === "telegram") adapters.telegram = createTelegramAdapter({ mode: "webhook", botToken: required("TELEGRAM_BOT_TOKEN"), secretToken: required("TELEGRAM_WEBHOOK_SECRET_TOKEN"), userName: required("TELEGRAM_BOT_USERNAME") })
-      if (platform === "discord") adapters.discord = createDiscordAdapter({ botToken: required("DISCORD_BOT_TOKEN"), applicationId: required("DISCORD_APPLICATION_ID"), publicKey: required("DISCORD_PUBLIC_KEY") })
+      if (platform === "slack") adapters.slack = createSlackAdapter({ mode: "webhook", botToken: required(this.env, "SLACK_BOT_TOKEN"), signingSecret: required(this.env, "SLACK_SIGNING_SECRET") })
+      if (platform === "telegram") adapters.telegram = createTelegramAdapter({ mode: "webhook", botToken: required(this.env, "TELEGRAM_BOT_TOKEN"), secretToken: required(this.env, "TELEGRAM_WEBHOOK_SECRET_TOKEN"), userName: required(this.env, "TELEGRAM_BOT_USERNAME") })
+      if (platform === "discord") adapters.discord = createDiscordAdapter({ botToken: required(this.env, "DISCORD_BOT_TOKEN"), applicationId: required(this.env, "DISCORD_APPLICATION_ID"), publicKey: required(this.env, "DISCORD_PUBLIC_KEY") })
     }
-    this.bot = new Chat({ userName: "agent", adapters, state: createRedisState({ url: required("REDIS_URL"), keyPrefix: "octg:" }), concurrency: "concurrent" })
+    this.bot = new Chat({ userName: "agent", adapters, state: createRedisState({ url: required(this.env, "REDIS_URL"), keyPrefix: "octg:" }), concurrency: "concurrent" })
     const handler = async (thread: Thread, message: Message) => this.handler!.handle(thread, message)
     this.bot.onNewMention(handler)
     this.bot.onDirectMessage(handler)

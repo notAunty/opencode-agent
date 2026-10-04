@@ -8,3 +8,5 @@
 !test/**
 !examples/
 !examples/**
+!scripts/
+!scripts/**

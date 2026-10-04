@@ -1,0 +1,41 @@
+services:
+  opencode:
+    build:
+      context: .
+      target: runtime
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "127.0.0.1:4096:4096"
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - workspace:/workspace
+      - opencode-data:/home/node/.local/share
+      - opencode-config:/home/node/.config
+    depends_on:
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  workspace:
+  opencode-data:
+  opencode-config:
+  redis-data:
