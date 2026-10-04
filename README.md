@@ -108,6 +108,25 @@ Expose webhook routes through HTTPS and register them with each platform yoursel
 - Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`
 - Configure event subscriptions to send events to `/chat/slack`
 
+In **OAuth & Permissions → Bot Token Scopes**, add:
+
+| Scope | Purpose |
+| --- | --- |
+| `chat:write` | Send replies |
+| `app_mentions:read` | Receive mentions |
+| `commands` | Slash commands |
+| `users:read` | Resolve sender profiles |
+| `im:history`, `im:read` | Direct messages |
+| `channels:history`, `channels:read` | Public-channel conversations |
+
+Optional scopes:
+
+- `groups:history`, `groups:read` for private channels
+- `mpim:history`, `mpim:read` for group DMs
+- `files:read`, `files:write` for incoming attachments and outgoing artifacts
+
+No User Token Scopes are needed for the current bot-token implementation. Reinstall the app after changing scopes, then use its Bot User OAuth Token (`xoxb-…`) as `SLACK_BOT_TOKEN`. Event subscriptions and slash-command URLs require separate setup
+
 To enable native slash commands:
 
 1. Open your app in [Slack app settings](https://api.slack.com/apps), choose **Slash Commands**, then **Create New Command**
