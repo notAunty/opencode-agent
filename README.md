@@ -12,9 +12,9 @@ Start with Telegram. You need OpenCode with a working model provider, Redis, a T
 
 1. Install the plugin:
    ```sh
-   opencode plugin add @notaunty/octg@latest
+    opencode plugin add @notaunty/opencode-agent@latest
    ```
-2. Merge [examples/opencode.jsonc](examples/opencode.jsonc) into your project's `opencode.jsonc`. Set the plugin package to `@notaunty/octg@latest`, `envFile` to `.env`, `chat.enabled` to `true`, and `chat.platforms` to `["telegram"]`
+2. Create a directory for your agents, such as `~/agents`. Copy [examples/opencode.jsonc](examples/opencode.jsonc) into it as `opencode.jsonc`. Set `envFile` to `.env`, `chat.enabled` to `true`, and `chat.platforms` to `["telegram"]`, then open OpenCode in that directory
 3. Put `REDIS_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN` in the project's `.env`, then reload the project plugin
 4. [Register the bot's webhook](https://core.telegram.org/bots/api#setwebhook) as `https://your-host/chat/telegram`, with `secret_token` matching `TELEGRAM_WEBHOOK_SECRET_TOKEN`
 5. From an authenticated OpenCode client in that project, create a session using your Telegram user ID:
@@ -40,10 +40,10 @@ Open the returned `sessionID` in CLI or web to continue the same conversation. T
 Requires OpenCode V2 2.0.22 or later within V2
 
 ```sh
-opencode plugin add @notaunty/octg@latest
+opencode plugin add @notaunty/opencode-agent@latest
 ```
 
-Merge [examples/opencode.jsonc](examples/opencode.jsonc) into your project configuration, preserving unrelated settings. Replace the example plugin package `"./"` with `"@notaunty/octg@latest"`, or your built plugin's absolute directory
+Copy [examples/opencode.jsonc](examples/opencode.jsonc) into a directory for your agents as `opencode.jsonc`, then open OpenCode there. The example already points to `@notaunty/opencode-agent`
 
 The configuration defines **Agent** as a primary OpenCode agent with **full tool permissions**. New Agent Sessions select it automatically. This permits shell commands, file edits, and other available tools without approval prompts; use it only in a trusted workspace
 
@@ -134,6 +134,6 @@ Recovery asks the agent to inspect unfinished task notes rather than replay the 
 - Chat does not grant native permissions or answer native questions; handle any remaining requests in CLI/web
 - Browser automation is optional. [examples/browser.jsonc](examples/browser.jsonc) supplies a disabled Playwriter connection; no extension or relay is activated automatically
 
-Use `octg_send_file` to send an explicitly selected project artifact to linked conversations. The owner RPC contract is exported as `@notaunty/octg/rpc`; see [src/rpc.ts](src/rpc.ts) for session management and timer methods
+Use `octg_send_file` to send an explicitly selected project artifact to linked conversations. The owner RPC contract is exported as `@notaunty/opencode-agent/rpc`; see [src/rpc.ts](src/rpc.ts) for session management and timer methods
 
 See [docs.md](docs.md) for architecture and operational details, and [AGENTS.md](AGENTS.md) for development boundaries

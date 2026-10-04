@@ -1,8 +1,8 @@
 {
-  "name": "@notaunty/octg",
+  "name": "@notaunty/opencode-agent",
   "version": "2.0.0",
   "description": "OpenCode V2 Agent Sessions with Vercel Chat SDK transports and durable wake timers",
-  "repository": { "type": "git", "url": "https://github.com/notAunty/opencode-telegram.git" },
+  "repository": { "type": "git", "url": "https://github.com/notAunty/opencode-agent" },
   "publishConfig": { "registry": "https://npm.pkg.github.com" },
   "type": "module",
   "exports": { ".": "./dist/src/index.js", "./rpc": "./dist/src/rpc.js" },
