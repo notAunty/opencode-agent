@@ -103,12 +103,14 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 - Seed commit: `8222380`, exactly the three required documents, on orphan branch `v2`
 - Domain interfaces, Agent Session registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
 - OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented
-- Docker verification passes strict typechecking, 19 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
+- Docker verification passes strict typechecking, 24 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
 - Synthetic webhook fixtures verify Slack signatures, Telegram secrets, and Discord Ed25519 signatures without bot connections
 - Browser research completed: prefer native V2 browser tools, with disabled-by-default Playwriter MCP for existing local Chrome; no host activation
 - Do not use ignored V1 `node_modules`, `.env`, configuration, or data when resuming
 
 ## Operational limits
+
+- Chat SDK native slash handlers share the existing command authorization and timer logic. Telegram menu publication is opt-in through `chat.telegramRegisterCommands`; Slack and Discord require external command setup. No development run registers real commands
 
 - The plugin runs while its OpenCode project location is active; minute timers are not an OS scheduler. Due timers are admitted on restart
 - One process owns a project scheduler. Plugin storage is durable but is not a cross-process transactional queue

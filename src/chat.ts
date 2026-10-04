@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http"
 import { mkdir, writeFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
-import { Chat, type Adapter, type Message, type Thread, type WebhookOptions } from "chat"
+import { Chat, type Adapter, type Message, type Thread, type SlashCommandEvent, type WebhookOptions } from "chat"
 import { createSlackAdapter } from "@chat-adapter/slack"
 import { createTelegramAdapter } from "@chat-adapter/telegram"
 import { createDiscordAdapter } from "@chat-adapter/discord"
@@ -12,6 +12,7 @@ import type { AgentSessions } from "./service.js"
 import type { Timers, TimerWhen } from "./timers.js"
 import { uploadedFile } from "./transfers.js"
 import { projectPath } from "./files.js"
+import { chatCommands, registerTelegramCommands } from "./commands.js"
 
 export interface ChatOptions {
   enabled: boolean
@@ -19,6 +20,7 @@ export interface ChatOptions {
   host: string
   platforms: ("slack" | "telegram" | "discord")[]
   discordGateway: boolean
+  telegramRegisterCommands?: boolean
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -33,7 +35,14 @@ export function timerWhen(value: { delayMs?: number; at?: string }): TimerWhen {
 
 export class ChatRouter {
   constructor(private service: AgentSessions, private timers: Timers, private directory: string, private changed: () => void = () => {}) {}
-  async handle(thread: Pick<Thread, "id" | "post" | "subscribe">, message: Message): Promise<void> {
+  async slash(event: SlashCommandEvent, thread: (id: string) => Pick<Thread, "subscribe">): Promise<void> {
+    const id = event.channel.id.startsWith("slack:") && event.channel.id.split(":").length === 2 ? `${event.channel.id}:` : event.channel.id
+    const command = event.command === "/cancel_recovery" ? "cancel-recovery" : event.command.slice(1)
+    await this.handle({ id, post: event.channel.post.bind(event.channel), subscribe: () => thread(id).subscribe() }, {
+      author: event.user, text: `!${command}${event.text ? ` ${event.text}` : ""}`, id: "slash-command", attachments: [],
+    })
+  }
+  async handle(thread: Pick<Thread, "id" | "post" | "subscribe">, message: Pick<Message, "author" | "text" | "id" | "attachments">): Promise<void> {
     if (message.author.isBot !== false || message.author.isMe || message.author.isSystem) return
     const platform = thread.id.split(":")[0]
     if (!["telegram", "slack", "discord"].includes(platform ?? "")) return
@@ -46,7 +55,16 @@ export class ChatRouter {
         await thread.post(`Linked to ${god.id}. Session: ${god.sessionID}. Everyone in this conversation can read its replies`)
         return
       }
-      const god = await this.service.byConversation(thread.id, actor)
+      let god
+      try { god = await this.service.byConversation(thread.id, actor) }
+      catch (error) {
+        // Slack slash commands are channel-scoped; explicit thread links still take precedence
+        if (!(error instanceof Error) || !/not linked/.test(error.message) || platform !== "slack") throw error
+        const id = `slack:${thread.id.split(":")[1]}:`
+        god = await this.service.byConversation(id, actor)
+        const original = thread
+        thread = { id, post: original.post.bind(original), subscribe: () => original.subscribe() }
+      }
       if (text === "!status") { await thread.post(JSON.stringify(await this.service.status(god.id, actor))); return }
       if (text === "!timers") { await thread.post(JSON.stringify(await this.timers.list(god.id))); return }
       if (text.startsWith("!cancel ")) { await thread.post(await this.timers.cancel(god.id, text.slice(8).trim()) ? "Timer cancelled" : "Timer not found"); return }
@@ -74,7 +92,7 @@ export class ChatRouter {
       await thread.post(safe ? message : "Request could not be saved. Check the OpenCode session and retry; no completed actions were replayed")
     }
   }
-  private async attachments(message: Message): Promise<FileInput[]> {
+  private async attachments(message: Pick<Message, "attachments">): Promise<FileInput[]> {
     if (message.attachments.length > 8) throw new Error("Prompt is too large")
     const files: FileInput[] = []
     for (const attachment of message.attachments) {
@@ -134,6 +152,7 @@ export class ChatBridge implements Messenger {
     this.bot.onNewMention(handler)
     this.bot.onDirectMessage(handler)
     this.bot.onSubscribedMessage(handler)
+    this.bot.onSlashCommand(chatCommands.map(({ command }) => `/${command}`), event => this.handler!.slash(event, id => this.bot!.thread(id)))
     await this.bot.initialize()
     this.server = createServer((request, response) => {
       void (async () => {
@@ -155,6 +174,11 @@ export class ChatBridge implements Messenger {
     this.server.requestTimeout = 15_000
     this.server.headersTimeout = 10_000
     await new Promise<void>((resolve, reject) => { this.server!.once("error", reject); this.server!.listen(this.options.port, this.options.host, resolve) })
+    if (adapters.telegram && this.options.telegramRegisterCommands) {
+      this.track(registerTelegramCommands(required(this.env, "TELEGRAM_BOT_TOKEN")).catch(() => {
+        console.error("octg: Telegram command menu registration failed; chat remains available")
+      }))
+    }
     const discord = adapters.discord
     if (discord && this.options.discordGateway) {
       const adapter = discord as ReturnType<typeof createDiscordAdapter>

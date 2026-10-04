@@ -21,9 +21,9 @@ Start with Telegram. You need OpenCode with a working model provider, Redis, a T
    ```sh
    opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
    ```
-6. Message your bot: `!agent research`, then send a normal message
+6. Message your bot: `/agent research`, then send a normal message
 
-Open the returned `sessionID` in CLI or web to continue the same conversation. Try `!wake 3600 Review the unfinished research notes` to schedule a wake in one hour
+Open the returned `sessionID` in CLI or web to continue the same conversation. Try `/wake 3600 Review the unfinished research notes` to schedule a wake in one hour
 
 ## Features
 
@@ -53,17 +53,20 @@ The configuration defines **Agent** as a primary OpenCode agent with **full tool
 
 Use these commands in a linked **messaging app conversation**. They are not OpenCode TUI slash commands. In CLI/web, chat directly with the native session; use the owner RPC for session management
 
+Native slash commands use Chat SDK handlers on Telegram, Slack, and Discord. The existing `!command` syntax remains supported; `/cancel_recovery` corresponds to `!cancel-recovery`. Slash commands must be configured on Slack and Discord before they appear
+
 | Command | Purpose |
 | --- | --- |
-| `!agent <id>` | Link this conversation to an authorized Agent Session |
-| `!status` | Inspect pending work and recovery status |
-| `!wake <seconds\|ISO timestamp> <prompt>` | Schedule a wake; absolute timestamps need a timezone |
-| `!timers` | List this session's timers |
-| `!cancel <timer-id>` | Cancel one of this session's timers |
-| `!cancel-recovery` | Cancel scheduled usage-reset recovery |
-| `!stop` | Interrupt execution and clear staged input/recovery; future timers remain |
-| `!retry` | Retry paused prompt admission, not completed actions |
-| `!unlink` | Remove this conversation's link |
+| `/agent <id>` | Link this conversation to an authorized Agent Session |
+| `/status` | Inspect pending work and recovery status |
+| `/wake <seconds\|ISO timestamp> <prompt>` | Schedule a wake; absolute timestamps need a timezone |
+| `/timers` | List this session's timers |
+| `/cancel <timer-id>` | Cancel one of this session's timers |
+| `/cancel_recovery` | Cancel scheduled usage-reset recovery |
+| `/stop` | Interrupt execution and clear staged input/recovery; future timers remain |
+| `/retry` | Retry paused prompt admission, not completed actions |
+| `/unlink` | Remove this conversation's link |
+| `/help` | List available commands |
 
 To register an existing primary session, include its `sessionID` in the create input. Registration preserves its selected native agent. Slack and Discord allowlist identities use `slack:<user-id>` and `discord:<user-id>`
 
@@ -96,6 +99,8 @@ Expose webhook routes through HTTPS and register them with each platform yoursel
 - Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`
 - Register `/chat/telegram` as the webhook, using the same secret token
 - Uses webhook mode, not polling
+- Commands work without a menu. Set `chat.telegramRegisterCommands` to `true` to publish the menu programmatically through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands) on startup
+- Registration replaces the bot's default, language-neutral menu with the commands above. It is disabled by default, does not alter webhooks, and does not grant session access. Disable it if another application manages the same bot's menu
 
 #### Slack
 
@@ -103,12 +108,24 @@ Expose webhook routes through HTTPS and register them with each platform yoursel
 - Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`
 - Configure event subscriptions to send events to `/chat/slack`
 
+To enable native slash commands:
+
+1. Open your app in [Slack app settings](https://api.slack.com/apps), choose **Slash Commands**, then **Create New Command**
+2. Add each command above (`/agent`, `/status`, `/wake`, `/timers`, `/cancel`, `/cancel_recovery`, `/stop`, `/retry`, `/unlink`, `/help`), with a short description and usage hint
+3. Set every command's **Request URL** to `https://your-host/chat/slack` and save
+4. Ensure the app has the `commands` and `chat:write` bot scopes; reinstall it in the workspace after changing scopes
+5. Invite the bot to the channel and run `/agent research` as an allowlisted user
+
+Slack slash commands operate at channel level, not within a particular message thread. A slash-command link covers that channel; mention the bot to chat there. An explicit `!agent` thread link takes precedence for messages in that thread
+
 #### Discord
 
 - Enable `discord` in `chat.platforms`
 - Set `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, and `DISCORD_PUBLIC_KEY`
 - Configure `/chat/discord` for interactions
 - For ordinary messages, enable `chat.discordGateway` and the appropriate Discord intents
+- Register the commands above through the [Discord application command API](https://discord.com/developers/docs/interactions/application-commands), and install the app with `applications.commands`. Use one required string option for commands with arguments, such as `/wake`'s full `<seconds|ISO timestamp> <prompt>` text
+- Slash commands use HTTP interactions and do not require Gateway. The plugin handles them but does not register Discord commands
 
 ### Memory and timers
 
