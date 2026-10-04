@@ -1,16 +1,22 @@
 {
-  "name": "octg",
+  "name": "@notaunty/octg",
   "version": "2.0.0",
-  "private": true,
+  "description": "OpenCode V2 Agent Sessions with Vercel Chat SDK transports and durable wake timers",
+  "repository": { "type": "git", "url": "https://github.com/notAunty/opencode-telegram.git" },
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
   "type": "module",
   "exports": { ".": "./dist/src/index.js", "./rpc": "./dist/src/rpc.js" },
-  "files": ["dist/src", "scripts", "README.md", "docs.md"],
+  "files": ["dist/src", "scripts", "examples", "README.md", "docs.md"],
   "engines": { "node": ">=22" },
   "scripts": {
     "check": "tsc --noEmit",
     "build": "tsc",
     "test": "node --import tsx --test test/*.test.ts",
-    "verify": "npm run check && npm run build && npm test"
+    "verify": "npm run check && npm run build && npm test",
+    "prepack": "npm run check && npm run build",
+    "dist": "npm pack",
+    "prepublishOnly": "npm run verify",
+    "publish:github": "npm publish --registry=https://npm.pkg.github.com"
   },
   "peerDependencies": { "@opencode/plugin": ">=2.0.22 <3" },
   "dependencies": {

@@ -32,7 +32,27 @@ Chat commands: `!agent <id>`, `!status`, `!wake <seconds|ISO timestamp> <prompt>
 
 Native plugin tools: `octg_save_memory`, `octg_wake`, `octg_send_file`. The last sends an explicitly selected screenshot/artifact to linked conversations and should require owner approval. Permissions and questions are answered in the native CLI/web, never automatically from chat
 
-The typed owner RPC contract is exported as `octg/rpc`. Methods include registry management, `prompt`, `status`, timers, `stop`, and `compact`; session-scoped inputs use `agentId`
+The typed owner RPC contract is exported as `@notaunty/octg/rpc`. Methods include registry management, `prompt`, `status`, timers, `stop`, and `compact`; session-scoped inputs use `agentId`
+
+## Distribution
+
+The package is prepared as `@notaunty/octg` for GitHub Packages. In your release environment:
+
+```sh
+npm ci
+npm run dist
+```
+
+This checks types, builds, and creates `notaunty-octg-2.0.0.tgz` locally without publishing. The package allowlist includes compiled plugin code, launchers, examples, and documentation, not credentials or runtime data
+
+To publish deliberately, authenticate using a GitHub personal access token (classic) with `write:packages`:
+
+```sh
+npm login --scope=@notaunty --auth-type=legacy --registry=https://npm.pkg.github.com
+npm run publish:github
+```
+
+Publishing runs verification first. New GitHub packages default to private; confirm package visibility and access after publication. Installation requires `read:packages` credentials and the `@notaunty` registry mapping for the OpenCode server account. Use `"package": "@notaunty/octg@2.0.0"` in plugin configuration after publishing. Increment the package version before subsequent releases
 
 ## Server deployment
 
