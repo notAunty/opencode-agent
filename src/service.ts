@@ -66,7 +66,7 @@ export class AgentSessions {
       else {
         // A failed registry write can be recovered without creating an orphan second session
         try { await this.sessions.get(sessionID) }
-        catch { await this.sessions.create({ id: sessionID, title: `Agent Session: ${input.id}`, agent: "main" }) }
+        catch { await this.sessions.create({ id: sessionID, title: `Agent Session: ${input.id}`, agent: "Agent" }) }
       }
       const god: AgentSession = { id: input.id, sessionID, allowedUsers: [...new Set(input.allowedUsers)], conversations: [], createdAt: this.now(), revision: 0 }
       state.gods.push(god)

@@ -8,7 +8,8 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 ## Agent Sessions
 
-- An Agent Session is an independent native primary OpenCode session using the `main` agent profile
+- An Agent Session is an independent native primary OpenCode session. New sessions select the configured `Agent` agent; registration preserves an existing session's selected agent
+- The example `Agent` configuration allows all tools without approval prompts and is intended for trusted workspaces
 - All Agent Sessions use the same project directory, personality, and shared long-term `MEMORY.md`
 - Short-term memory is `TASKS/<agentId>.md`, loaded only for the corresponding Agent Session
 - CLI, OpenCode web, and linked Chat SDK conversations address the same native session
@@ -40,7 +41,7 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 ## Communication
 
-- Official Vercel Chat SDK Slack, Telegram, and Discord adapters in the first implementation
+- Support the Chat SDK adapter ecosystem, with Telegram, Slack, and Discord as first-class integrations
 - Persistent self-hosted OpenCode service; no requirement for Vercel hosting
 - Explicitly enabled, verified webhook listener; ordinary Discord chat additionally uses Gateway
 - Durable Chat SDK state for subscriptions, deduplication, and concurrency queues
@@ -116,5 +117,5 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 - Usage-reset recovery currently trusts a bounded future HTTP `Retry-After` value on a 429 response. No reset time is guessed. Recovery is opt-in, capped at three checks, waits for a fresh reset failure between successful admissions, and does not replay original work
 - Native permission requests are reported in chat; native question handling stays in CLI/web. Question-specific chat notifications are not implemented
 - Shared browser profiles and files are deliberate shared authority, not isolation between untrusted agents. Native browser availability depends on the chosen OpenCode runtime
-- Optional Playwriter is pinned, disabled, and denied by default. It requires an explicitly configured Chrome extension/relay outside development. Enabling it grants arbitrary browser automation against that profile; permission rules must be changed deliberately for trusted agents
+- Optional Playwriter is pinned and disabled. It requires an explicitly configured Chrome extension/relay outside development. The `Agent` agent allows all available tools, so enabling the connection grants browser automation unless more restrictive native permissions are configured
 - Live Slack/Telegram/Discord delivery and Discord Gateway renewal need deployment smoke tests with dedicated bot credentials. Development never connects real bots

@@ -1,119 +1,139 @@
-# OCTG V2
+# OpenCode Agent Sessions
 
-A clean-room OpenCode V2 plugin for persistent Agent Sessions through OpenCode CLI, web, and Vercel Chat SDK
+Keep persistent OpenCode agents within reach from your terminal, the web, or messaging apps (eg. Telegram, Whatsapp, Google Chat and more!)
 
-## Requirements
+`opencode-agent` is an OpenCode v2 plugin. Each OpenCode session could be / is a main Agent, and background workers could be spawn by each Agent. OpenCode owns the conversation, model calls, permissions, background subagents, and compaction; the plugin adds chat routing, memory notes, wake timers, and notifications
 
-- Multiple independent primary sessions in one shared project directory
-- Shared personality and `MEMORY.md`; isolated short-term notes in `TASKS/<agentId>.md`
-- Explicit cross-channel linking and a mandatory per-session user allowlist
-- Slack, Telegram, and Discord through official Chat SDK adapters
-- Native background subagents and automatic compaction, not a second agent runtime
-- Durable JSON timers checked every minute to wake an Agent Session with a saved prompt
-- Graceful API-error notifications and optional bounded recovery at verified usage-reset times
+For example, keep a `research` session and a `planning` session in the same project. Give each a different chat-user allowlist, continue their conversations in OpenCode, and schedule a saved prompt to wake either session later
 
-See [docs.md](docs.md) for the agreed requirements and architecture
+## Quick start
 
-## Deployment
+Start with Telegram. You need OpenCode with a working model provider, Redis, a Telegram bot, and an HTTPS URL forwarding to the plugin's port `8787`
 
-Install and build this package in your deployment environment, then merge `examples/opencode.jsonc` into that project's OpenCode V2 configuration. Set the plugin `package` to this package's absolute directory. The native primary agent profile is `main`
+1. Install the plugin:
+   ```sh
+   opencode plugin add @notaunty/octg@latest
+   ```
+2. Merge [examples/opencode.jsonc](examples/opencode.jsonc) into your project's `opencode.jsonc`. Set the plugin package to `@notaunty/octg@latest`, `envFile` to `.env`, `chat.enabled` to `true`, and `chat.platforms` to `["telegram"]`
+3. Put `REDIS_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN` in the project's `.env`, then reload the project plugin
+4. [Register the bot's webhook](https://core.telegram.org/bots/api#setwebhook) as `https://your-host/chat/telegram`, with `secret_token` matching `TELEGRAM_WEBHOOK_SECRET_TOKEN`
+5. From an authenticated OpenCode client in that project, create a session using your Telegram user ID:
+   ```sh
+   opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
+   ```
+6. Message your bot: `!agent research`, then send a normal message
 
-Chat is disabled by default. To enable it, provide the environment variables listed in `.env.example`, a durable Redis instance, and set `chat.enabled` to `true`. Enable only the platforms you have configured. Expose `/chat/slack`, `/chat/telegram`, and `/chat/discord` through your HTTPS ingress and register their webhooks explicitly. The plugin never registers or deletes platform webhooks. Discord ordinary messages additionally require `discordGateway: true` and the platform's appropriate intents
+Open the returned `sessionID` in CLI or web to continue the same conversation. Try `!wake 3600 Review the unfinished research notes` to schedule a wake in one hour
 
-From an authenticated OpenCode client in the configured project, create an Agent Session:
+## Features
 
-```sh
-opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
-```
+- **Multi-channel conversations** through the Chat SDK adapter ecosystem, with Telegram, Slack, and Discord as first-class integrations
+- **Independent Agent Sessions** with separate conversations, task notes, timers, and user allowlists
+- **Shared personality and memory** through project instructions and `MEMORY.md`, with short-term notes in `TASKS/<agentId>.md`
+- **Native background workers and compaction** without a second agent runtime
+- **Durable wake timers** checked every minute, queued when due, and cancellable by ID
+- **API-error notifications** with optional bounded recovery after a provider supplies a usage-reset time
+- **Attachments and artifacts** for incoming files and explicitly selected outgoing screenshots or documents
 
-Open the returned `sessionID` in the CLI or web session picker. Alternatively, register an existing primary session by including its `sessionID` in the create input. Chat users first send `!agent research`; they must already be in that session's allowlist
+## Installation
 
-Chat commands: `!agent <id>`, `!status`, `!wake <seconds|ISO timestamp> <prompt>`, `!timers`, `!cancel <timer-id>`, `!cancel-recovery`, `!stop`, `!retry`, `!unlink`. `!stop` leaves future timers scheduled
-
-Native plugin tools: `octg_save_memory`, `octg_wake`, `octg_send_file`. The last sends an explicitly selected screenshot/artifact to linked conversations and should require owner approval. Permissions and questions are answered in the native CLI/web, never automatically from chat
-
-The typed owner RPC contract is exported as `@notaunty/octg/rpc`. Methods include registry management, `prompt`, `status`, timers, `stop`, and `compact`; session-scoped inputs use `agentId`
-
-## Distribution
-
-The package is prepared as `@notaunty/octg` for GitHub Packages. In your release environment:
-
-```sh
-npm ci
-npm run dist
-```
-
-This checks types, builds, and creates `notaunty-octg-2.0.0.tgz` locally without publishing. The package allowlist includes compiled plugin code, launchers, examples, and documentation, not credentials or runtime data
-
-To publish deliberately, authenticate using a GitHub personal access token (classic) with `write:packages`:
+Requires OpenCode V2 2.0.22 or later within V2
 
 ```sh
-npm login --scope=@notaunty --auth-type=legacy --registry=https://npm.pkg.github.com
-npm run publish:github
+opencode plugin add @notaunty/octg@latest
 ```
 
-Publishing runs verification first. New GitHub packages default to private; confirm package visibility and access after publication. Installation requires `read:packages` credentials and the `@notaunty` registry mapping for the OpenCode server account. Use `"package": "@notaunty/octg@2.0.0"` in plugin configuration after publishing. Increment the package version before subsequent releases
+Merge [examples/opencode.jsonc](examples/opencode.jsonc) into your project configuration, preserving unrelated settings. Replace the example plugin package `"./"` with `"@notaunty/octg@latest"`, or your built plugin's absolute directory
 
-## Server deployment
+The configuration defines **Agent** as a primary OpenCode agent with **full tool permissions**. New Agent Sessions select it automatically. This permits shell commands, file edits, and other available tools without approval prompts; use it only in a trusted workspace
 
-`Dockerfile` now defaults to the running OpenCode V2 service, not tests. `docker-compose.yml` includes Redis on Alpine with append-only persistence. OpenCode runs as a non-root user; workspace, native data/configuration, and Redis data use named volumes. No host project or secret directory is mounted
+[Docker Compose](docker-compose.yml) is available for quick server deployment of OpenCode with persistent storage and Redis
 
-Create a deployment `.env` from `.env.example`, fill only the credentials you need, then run:
+## Chat commands
 
-```sh
-docker compose up -d --build
-```
+Use these commands in a linked **messaging app conversation**. They are not OpenCode TUI slash commands. In CLI/web, chat directly with the native session; use the owner RPC for session management
 
-Compose's `env_file` injects `.env` values into the OpenCode process; `REDIS_URL` is set to the internal Redis service. Redis is not published. OpenCode and webhook ports are published on host loopback only. Expose only webhook routes through your HTTPS ingress; do not expose the owner API without authentication
+| Command | Purpose |
+| --- | --- |
+| `!agent <id>` | Link this conversation to an authorized Agent Session |
+| `!status` | Inspect pending work and recovery status |
+| `!wake <seconds\|ISO timestamp> <prompt>` | Schedule a wake; absolute timestamps need a timezone |
+| `!timers` | List this session's timers |
+| `!cancel <timer-id>` | Cancel one of this session's timers |
+| `!cancel-recovery` | Cancel scheduled usage-reset recovery |
+| `!stop` | Interrupt execution and clear staged input/recovery; future timers remain |
+| `!retry` | Retry paused prompt admission, not completed actions |
+| `!unlink` | Remove this conversation's link |
 
-The image seeds `/workspace/opencode.json` with chat disabled. Edit that file inside the container to enable your selected platforms, then restart the service. The workspace volume preserves configuration and memory. Image upgrades do not replace existing workspace configuration
+To register an existing primary session, include its `sessionID` in the create input. Registration preserves its selected native agent. Slack and Discord allowlist identities use `slack:<user-id>` and `discord:<user-id>`
 
-```sh
-docker compose exec opencode opencode api get '/api/plugin?location[directory]=/workspace'
-docker compose restart opencode
-```
+## Configuration
 
-The authenticated health check activates the `/workspace` plugin, so timers run without an attached interactive client
+### Environment variables
 
-## Laptop environment
+Provide credentials through the OpenCode server's environment. [.env.example](.env.example) lists the chat variables; Docker Compose loads them through `env_file`
 
-Keep your dedicated agent directory separate from the installed plugin directory. In that agent directory, merge the example configuration and use the plugin's absolute package path
+For project-local chat credentials, set plugin option `"envFile": ".env"`. It reads the file as data, preserves inherited environment values, and does not configure native model-provider credentials. Reload the plugin after changing it
 
-To load that directory's `.env` before launching OpenCode, use the included launcher after building the package:
+To load a project's `.env` for both chat and native model providers, launch a fresh OpenCode process with the included launcher:
 
 ```sh
 cd ~/agents
-node /absolute/path/to/octg/scripts/opencode-env.mjs --standalone
+node /path/to/installed/plugin/scripts/opencode-env.mjs --standalone
 ```
 
-You can use a shell function for the usual `opencode` command without editing OpenCode's global configuration:
+An already-running shared server cannot inherit a new client shell's environment. Keep `.env` out of version control and restrict its permissions. Exported credentials from a secret manager work too
 
-```sh
-opencode() { node /absolute/path/to/octg/scripts/opencode-env.mjs --standalone "$@"; }
-```
+### Chat integrations
 
-This parses `.env` as data, not executable shell code. Existing environment variables win. `--standalone` ensures a fresh private server inherits those values; an already-running shared server would not inherit a new client shell's environment. Use this function for interactive usage, not service-management commands
+Set `chat.enabled` to `true`, select your configured platforms in `chat.platforms`, and provide `REDIS_URL`. Chat is disabled by default. The listener defaults to `127.0.0.1:8787`
 
-Alternatively, plugin options `"envFile": ".env"` load chat credentials directly from the current project directory, even in a shared OpenCode service. This is opt-in, project-scoped, and does not mutate global `process.env` or configure model-provider credentials. The launcher loads all variables into the child OpenCode process instead. Changes require restarting the standalone/container process or reloading the project plugin, respectively
+Expose webhook routes through HTTPS and register them with each platform yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
 
-Keep `.env` out of version control and restrict its file permissions. The example launcher/function is not installed into your shell automatically
+#### Telegram
 
-## Verification
+- Enable `telegram` in `chat.platforms`
+- Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`
+- Register `/chat/telegram` as the webhook, using the same secret token
+- Uses webhook mode, not polling
 
-All development verification runs in disposable containers without real credentials, host mounts, or bot connections:
+#### Slack
 
-```sh
-docker build --target test -t octg-v2-test .
-docker run --rm --network none octg-v2-test
-docker run --rm --network none octg-v2-test timeout --kill-after=2s 60s node dist/test/native.js
-```
+- Enable `slack` in `chat.platforms`
+- Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`
+- Configure event subscriptions to send events to `/chat/slack`
 
-The build checks types, runs synthetic tests, and compiles the plugin. The native fixture exercises OpenCode V2's embedded SDK without a host service or model calls
+#### Discord
 
-## Browser access
+- Enable `discord` in `chat.platforms`
+- Set `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, and `DISCORD_PUBLIC_KEY`
+- Configure `/chat/discord` for interactions
+- For ordinary messages, enable `chat.discordGateway` and the appropriate Discord intents
 
-Prefer OpenCode V2's native browser tools when available. `examples/browser.jsonc` shows a disabled Playwriter MCP alternative for an existing Chrome profile. Neither browser access nor an extension/relay is activated by this repository. See `docs.md` for security and lifecycle limitations
+### Memory and timers
 
-## Provenance
+Agent Sessions share the project directory and `MEMORY.md`; each has its own `TASKS/<agentId>.md`. Bounded notes are included in model context and native compaction requests. The `octg_save_memory` tool saves these notes
 
-The `v2` seed contains only `README.md`, `AGENTS.md`, and `docs.md`. No V1 code, dependencies, configuration, or runtime data is reused. `main` remains unchanged
+Timers persist in `.octg/timers.json`. The plugin checks them every minute and queues saved prompts into the target session. `octg_wake` schedules a timer from the agent itself
+
+Keep OpenCode and its project plugin active for unattended timers. Overdue timers are admitted when the plugin becomes active again
+
+### Error recovery
+
+API failures produce sanitized chat notifications. Optional `usageResetRecovery` is disabled by default; it uses a bounded future `Retry-After` value from HTTP 429 responses and is capped at three checks
+
+Recovery asks the agent to inspect unfinished task notes rather than replay the failed prompt. It waits for a fresh reset failure between successful admissions. New user activity or `!cancel-recovery` cancels it
+
+## Permissions and limitations
+
+- **Agent has full permissions.** Chat authorization limits who can prompt a session, not what that agent can do. Restrict native permissions yourself if needed
+- Linked groups and channels expose replies to everyone who can read them
+- Shared files and browser profiles are not isolation between untrusted agents
+- One process owns a project's scheduler; timers do not run when the plugin is inactive
+- Platform posts can duplicate after a crash. Replies already compacted during downtime may be missed
+- Chat does not grant native permissions or answer native questions; handle any remaining requests in CLI/web
+- Browser automation is optional. [examples/browser.jsonc](examples/browser.jsonc) supplies a disabled Playwriter connection; no extension or relay is activated automatically
+
+Use `octg_send_file` to send an explicitly selected project artifact to linked conversations. The owner RPC contract is exported as `@notaunty/octg/rpc`; see [src/rpc.ts](src/rpc.ts) for session management and timer methods
+
+See [docs.md](docs.md) for architecture and operational details, and [AGENTS.md](AGENTS.md) for development boundaries

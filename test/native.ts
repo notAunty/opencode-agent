@@ -23,7 +23,7 @@ try {
   assert.notEqual(alice.sessionID, bob.sessionID)
   const session = await host.sessions.get({ sessionID: alice.sessionID as never }, request)
   assert.equal(session.location.directory, directory)
-  assert.equal(session.agent, "main")
+  assert.equal(session.agent, "Agent")
   await owner.link({ agentId: "alice", conversation: "telegram:synthetic", user: "telegram:1" }, request)
   await assert.rejects(owner.link({ agentId: "bob", conversation: "telegram:synthetic", user: "telegram:1" }, request))
   const timer = await owner.timer({ agentId: "alice", prompt: "synthetic future wake", delayMs: 3_600_000 }, request)
