@@ -59,7 +59,10 @@ export class AgentSessions {
       if (state.gods.some(g => g.id === input.id)) throw new Error("Agent ID already exists")
       if (input.sessionID && state.gods.some(g => g.sessionID === input.sessionID)) throw new Error("Session already belongs to an Agent Session")
       const sessionID = input.sessionID ?? nativeID("ses", `god:${this.namespace}:${input.id}`)
-      if (input.sessionID) await this.sessions.get(sessionID)
+      if (input.sessionID) {
+        const session = await this.sessions.get(sessionID)
+        if (session.parentID) throw new Error("Register a primary native session, not a child task session")
+      }
       else {
         // A failed registry write can be recovered without creating an orphan second session
         try { await this.sessions.get(sessionID) }
@@ -104,7 +107,7 @@ export class AgentSessions {
     if (text.length > 32_000 || files.length > 8) throw new Error("Prompt is too large")
     return this.lock.run(async () => {
       const state = await this.read(); const god = this.find(state, id, actor)
-      const messageID = nativeID("msg", `${id}:${key}`)
+      const messageID = nativeID("msg", `${this.namespace}:${id}:${key}`)
       if (state.seen[`input:${messageID}`] || state.pending.some(p => p.id === messageID)) return
       if (state.pending.filter(p => p.godId === id).length >= 100) throw new Error("Agent inbox is full; retry after queued work drains")
       god.revision++
@@ -116,7 +119,7 @@ export class AgentSessions {
   async admitTimer(id: string, timerID: string, text: string): Promise<void> {
     // Native admission, not the local staging queue, is the timer's durable completion boundary
     const god = await this.get(id)
-    await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `timer:${id}:${timerID}`), text: `[Scheduled wake ${timerID}]\n${text}` })
+    await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `timer:${this.namespace}:${id}:${timerID}`), text: `[Scheduled wake ${timerID}]\n${text}` })
   }
   taskOutcome(id: string, childSessionID: string, outcome: string, updated: number): Promise<void> {
     return this.lock.run(async () => {
@@ -136,7 +139,7 @@ export class AgentSessions {
   private notice(state: State, god: AgentSession, text: string, key: string, file?: FileInput): void {
     for (const conversation of god.conversations) {
       if (!god.allowedUsers.includes(conversation.linkedBy)) continue
-      const id = nativeID("msg", `${god.id}:${conversation.id}:${key}`)
+      const id = nativeID("msg", `${this.namespace}:${god.id}:${conversation.id}:${key}`)
       if (state.seen[`notice:${id}`] || state.notices.some(n => n.id === id)) continue
       state.notices.push({ id, godId: god.id, conversation: conversation.id, text, dueAt: this.now(), attempts: 0, ...(file ? { file } : {}) })
       state.seen[`notice:${id}`] = this.now()
@@ -191,7 +194,7 @@ export class AgentSessions {
         if (!god || (pending.actor && !god.allowedUsers.includes(pending.actor))) {
           state.pending = state.pending.filter(p => p.id !== pending.id); continue
         }
-        // Preserve each God's admission order when the first queued request cannot be admitted
+        // Preserve per-session order when the first queued request cannot be admitted
         if (state.pending.find(p => p.godId === pending.godId)?.id !== pending.id) continue
         try {
           await this.sessions.prompt({ sessionID: god.sessionID, id: pending.id, text: pending.text, files: pending.files })
@@ -208,7 +211,7 @@ export class AgentSessions {
         const god = state.gods.find(g => g.id === recovery.godId && g.revision === recovery.revision)
         if (!god) continue
         try {
-          await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `recovery:${god.id}:${recovery.revision}:${recovery.attempts}`),
+          await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `recovery:${this.namespace}:${god.id}:${recovery.revision}:${recovery.attempts}`),
             text: "Provider reset recovery check: inspect your current TASKS notes and completed actions first. Continue only unfinished, still-requested work. Do not replay completed side effects" })
           recovery.attempts++; recovery.awaitingResult = true
         } catch { recovery.attempts++; recovery.dueAt = this.now() + 60_000 }

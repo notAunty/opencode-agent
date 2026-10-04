@@ -6,7 +6,7 @@ import type { Json, NativeMessage, Sessions, Storage } from "../src/contracts.js
 function fixture() {
   const values = new Map<string, unknown>()
   const storage: Storage = { get: async key => structuredClone(values.get(key)), set: async (key, value: Json) => { values.set(key, structuredClone(value)) } }
-  const prompts: unknown[] = []; const replies: unknown[] = []; const created = new Map<string, { id: string }>()
+  const prompts: unknown[] = []; const replies: unknown[] = []; const created = new Map<string, { id: string; parentID?: string }>()
   const messages: NativeMessage[] = []
   let failed = false; let failedSession: string | undefined; let now = 1000
   const sessions: Sessions = {
@@ -16,7 +16,7 @@ function fixture() {
     context: async () => messages, compact: async () => {}, interrupt: async () => {},
   }
   const messenger = { post: async (conversation: string, text: string) => { replies.push({ conversation, text }) } }
-  const make = () => new AgentSessions(storage, sessions, messenger, () => now, true)
+  const make = (namespace = "octg") => new AgentSessions(storage, sessions, messenger, () => now, true, namespace)
   return { make, prompts, replies, messages, created, fail: (value: boolean) => { failed = value }, failSession: (id: string) => { failedSession = id }, advance: (ms: number) => { now += ms } }
 }
 
@@ -29,6 +29,24 @@ test("each Agent Session has its own authorization and linked native session", a
   await service.link("alice", "telegram:chat", "telegram:1")
   await assert.rejects(service.byConversation("telegram:chat", "telegram:2"), /access denied/)
   await assert.rejects(service.link("bob", "telegram:chat", "telegram:2"), /access denied/)
+})
+test("native session and message admission IDs are isolated across projects", async () => {
+  const a = fixture(); const b = fixture()
+  const first = a.make("project-a"); const second = b.make("project-b")
+  const sessionA = await first.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  const sessionB = await second.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  assert.notEqual(sessionA.sessionID, sessionB.sessionID)
+  await first.accept("alice", "hello", "same"); await second.accept("alice", "hello", "same")
+  await first.admitTimer("alice", "same-timer", "wake"); await second.admitTimer("alice", "same-timer", "wake")
+  await first.tick(); await second.tick()
+  const id = (prompt: unknown) => (prompt as { id: string }).id
+  assert.notEqual(id(a.prompts[0]), id(b.prompts[0]))
+  assert.notEqual(id(a.prompts[1]), id(b.prompts[1]))
+})
+test("a native child task cannot be registered as a primary Agent Session", async () => {
+  const f = fixture()
+  f.created.set("ses_child", { id: "ses_child", parentID: "ses_parent" })
+  await assert.rejects(f.make().create({ id: "child", allowedUsers: ["telegram:1"], sessionID: "ses_child" }), /primary native session/)
 })
 test("staged input survives restart, deduplicates and checks revocation", async () => {
   const f = fixture(); let service = f.make()
