@@ -21,8 +21,6 @@ export interface ChatOptions {
   host: string
   platforms: ("slack" | "telegram" | "discord")[]
   discordGateway: boolean
-  telegramRegisterCommands?: boolean
-  telegramTransport?: "polling" | "webhook"
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -37,6 +35,9 @@ export function timerWhen(value: { delayMs?: number; at?: string }): TimerWhen {
 
 export class ChatRouter {
   constructor(private service: AgentSessions, private timers: Timers, private directory: string, private changed: () => void = () => {}) {}
+  async linked(conversation: string): Promise<boolean> {
+    return (await this.service.list()).some(agent => agent.conversations.some(binding => binding.id === conversation))
+  }
   async slash(event: SlashCommandEvent, thread: (id: string) => Pick<Thread, "subscribe">): Promise<void> {
     const id = event.channel.id.startsWith("slack:") && event.channel.id.split(":").length === 2 ? `${event.channel.id}:` : event.channel.id
     const command = event.command === "/cancel_recovery" ? "cancel-recovery" : event.command.slice(1)
@@ -176,7 +177,7 @@ export class ChatBridge implements MessagingTransport {
     this.server.requestTimeout = 15_000
     this.server.headersTimeout = 10_000
     await new Promise<void>((resolve, reject) => { this.server!.once("error", reject); this.server!.listen(this.options.port, this.options.host, resolve) })
-    if (adapters.telegram && this.options.telegramRegisterCommands) {
+    if (adapters.telegram) {
       this.track(registerTelegramCommands(required(this.env, "TELEGRAM_BOT_TOKEN")).catch(() => {
         console.error("octg: Telegram command menu registration failed; chat remains available")
       }))

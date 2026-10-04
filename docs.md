@@ -43,8 +43,8 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 - Support the Chat SDK adapter ecosystem, with Telegram, Slack, and Discord as first-class integrations
 - Persistent self-hosted OpenCode service; no requirement for Vercel hosting
-- Separate messaging transports share authorization, commands, files, and replies. Telegram defaults to Telegraf long polling; Chat SDK webhook adapters remain available. Ordinary Discord chat additionally uses Gateway
-- Durable Chat SDK state for webhook subscriptions, deduplication, and concurrency queues; Telegram-only polling needs neither Redis nor a listener
+- Separate messaging transports share authorization, commands, files, and replies. Telegram uses Telegraf long polling with automatic command registration; Slack uses the official Socket Mode and Web API libraries. Chat SDK adapters remain in the codebase, with Discord using the webhook bridge and optional Gateway
+- Durable Chat SDK state for webhook subscriptions, deduplication, and concurrency queues; Telegram and Slack need neither Redis nor a listener
 - Persist incoming work before waiting for a model; acknowledge webhooks independently of model execution
 - Reject unauthorized users before routing inputs or fetching attachments
 - Carry text and image attachments into native prompts; forward explicit assistant image outputs, not arbitrary tool logs
@@ -103,14 +103,15 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 - Seed commit: `8222380`, exactly the three required documents, on orphan branch `v2`
 - Domain interfaces, Agent Session registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
 - OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented
-- Docker verification passes strict typechecking, 27 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
+- Docker verification passes strict typechecking, 29 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
 - Synthetic webhook fixtures verify Slack signatures, Telegram secrets, and Discord Ed25519 signatures without bot connections
 - Browser research completed: prefer native V2 browser tools, with disabled-by-default Playwriter MCP for existing local Chrome; no host activation
 - Do not use ignored V1 `node_modules`, `.env`, configuration, or data when resuming
 
 ## Operational limits
 
-- Chat SDK native slash handlers and Telegraf command handlers share command authorization and timer logic. Telegram menu publication defaults on and can be disabled through `chat.telegramRegisterCommands`; Slack and Discord require external command setup. No development run registers real commands
+- Chat SDK native slash handlers, Slack socket commands and Telegraf command handlers share command authorization and timer logic. Telegram menu publication is automatic; Slack and Discord require external command setup. No development run registers real commands
+- Slack acknowledges socket envelopes before routing to satisfy the platform deadline. An acknowledged event may be lost if the process crashes before durable staging. The socket library reconnects transport connections; outgoing Web API retries are disabled so application outbox policy owns retries
 - Telegraf polling checks for an existing webhook and refuses to replace it. It uses abortable `getUpdates` requests rather than `launch()`, which would delete deployment-owned webhook configuration. Offsets advance after update handling; native admission IDs and durable inbox state limit duplicate prompts on redelivery. This is not an exactly-once transport
 
 - The plugin runs while its OpenCode project location is active; minute timers are not an OS scheduler. Due timers are admitted on restart

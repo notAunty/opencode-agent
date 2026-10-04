@@ -9,9 +9,7 @@
           "host": "127.0.0.1",
           "port": 8787,
           "platforms": ["telegram", "slack", "discord"],
-           "discordGateway": false,
-           "telegramTransport": "polling",
-           "telegramRegisterCommands": true
+           "discordGateway": false
         },
         "usageResetRecovery": false,
         "memoryMaxBytes": 12000

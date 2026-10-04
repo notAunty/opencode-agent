@@ -16,7 +16,7 @@ Start with Telegram. You need OpenCode with a working model provider and a Teleg
    ```
 2. Create a directory for your agents, such as `~/agents`. Copy [examples/opencode.jsonc](examples/opencode.jsonc) into it as `opencode.jsonc`. Set `envFile` to `.env`, `chat.enabled` to `true`, and `chat.platforms` to `["telegram"]`, then open OpenCode in that directory
 3. Put `TELEGRAM_BOT_TOKEN` in the project's `.env`, then reload the project plugin
-4. Keep `chat.telegramTransport` set to `"polling"`. Use a bot without an existing webhook; polling refuses to change one. Only one process may poll the same bot
+4. Use a bot without an existing webhook; polling refuses to change one. Only one process may poll the same bot
 5. From an authenticated OpenCode client in that project, create a session using your Telegram user ID:
    ```sh
    opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
@@ -89,24 +89,25 @@ An already-running shared server cannot inherit a new client shell's environment
 
 ### Chat integrations
 
-Set `chat.enabled` to `true` and select platforms in `chat.platforms`. Chat is disabled by default. Chat SDK webhook adapters require `REDIS_URL` and use the listener at `127.0.0.1:8787`; Telegram-only polling uses neither
+Set `chat.enabled` to `true` and select platforms in `chat.platforms`. Telegram uses Telegraf long polling and Slack uses Socket Mode automatically; neither needs Redis or a public endpoint. Chat is disabled by default. Discord uses Chat SDK with `REDIS_URL` and a listener at `127.0.0.1:8787`
 
 Expose webhook routes through HTTPS and register them with each platform yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
 
 #### Telegram
 
 - Enable `telegram` in `chat.platforms`
-- Default `chat.telegramTransport: "polling"` uses a separate Telegraf transport with only `TELEGRAM_BOT_TOKEN`
+- Telegraf long polling uses only `TELEGRAM_BOT_TOKEN`
 - Polling uses outbound requests only, preserves existing webhooks, and stops gracefully with the plugin. Use one polling process per bot
-- Set `chat.telegramTransport: "webhook"` to retain the Chat SDK adapter. This mode also needs `REDIS_URL`, `TELEGRAM_BOT_USERNAME`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`; register `/chat/telegram` with that secret yourself
-- Commands work without a menu. Set `chat.telegramRegisterCommands` to `true` to publish the menu programmatically through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands) on startup
-- Registration replaces the bot's default, language-neutral menu with the commands above. It is enabled by default, does not alter webhooks, and does not grant session access. Disable it if another application manages the same bot's menu
+- Startup publishes commands through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands), replacing the default language-neutral menu. Registration does not alter webhooks or grant session access
 
 #### Slack
 
 - Enable `slack` in `chat.platforms`
-- Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`
-- Configure event subscriptions to send events to `/chat/slack`
+- Set `SLACK_BOT_TOKEN` (`xoxb-…`) and `SLACK_APP_TOKEN` (`xapp-…`)
+- In **Basic Information → App-Level Tokens**, generate an app token with `connections:write`
+- Enable **Socket Mode** in Slack app settings. No signing secret, Request URL, tunnel, or Redis is needed
+- Enable **Event Subscriptions**, then subscribe to `message.im` and `app_mention`; add `message.channels`, `message.groups`, or `message.mpim` for conversations you use
+- Under **App Home**, enable Messages Tab and allow users to send messages and slash commands
 
 In **OAuth & Permissions → Bot Token Scopes**, add:
 
@@ -125,13 +126,13 @@ Optional scopes:
 - `mpim:history`, `mpim:read` for group DMs
 - `files:read`, `files:write` for incoming attachments and outgoing artifacts
 
-No User Token Scopes are needed for the current bot-token implementation. Reinstall the app after changing scopes, then use its Bot User OAuth Token (`xoxb-…`) as `SLACK_BOT_TOKEN`. Event subscriptions and slash-command URLs require separate setup
+No User Token Scopes are needed. Reinstall the app after changing scopes, then use its Bot User OAuth Token (`xoxb-…`) as `SLACK_BOT_TOKEN`. Event subscriptions and slash commands still require setup in Slack
 
 To enable native slash commands:
 
 1. Open your app in [Slack app settings](https://api.slack.com/apps), choose **Slash Commands**, then **Create New Command**
 2. Add each command above (`/agent`, `/status`, `/wake`, `/timers`, `/cancel`, `/cancel_recovery`, `/stop`, `/retry`, `/unlink`, `/help`), with a short description and usage hint
-3. Set every command's **Request URL** to `https://your-host/chat/slack` and save
+3. Save each command. With Socket Mode enabled, a Request URL is not required
 4. Ensure the app has the `commands` and `chat:write` bot scopes; reinstall it in the workspace after changing scopes
 5. Invite the bot to the channel and run `/agent research` as an allowlisted user
 

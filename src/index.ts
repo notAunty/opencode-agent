@@ -18,8 +18,7 @@ const optionsSchema = z.object({
   envFile: z.string().min(1).optional(),
   chat: z.object({ enabled: z.boolean().default(false), port: z.number().int().min(1024).max(65535).default(8787),
     host: z.string().default("127.0.0.1"), platforms: z.array(z.enum(["slack", "telegram", "discord"])).default([]),
-    discordGateway: z.boolean().default(false), telegramRegisterCommands: z.boolean().default(true),
-    telegramTransport: z.enum(["polling", "webhook"]).default("polling") }).default({ enabled: false, port: 8787, host: "127.0.0.1", platforms: [], discordGateway: false, telegramRegisterCommands: true, telegramTransport: "polling" }),
+    discordGateway: z.boolean().default(false) }).default({ enabled: false, port: 8787, host: "127.0.0.1", platforms: [], discordGateway: false }),
   usageResetRecovery: z.boolean().default(false),
   memoryMaxBytes: z.number().int().min(1024).max(32_000).default(12_000),
 })

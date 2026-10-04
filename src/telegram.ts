@@ -11,7 +11,7 @@ export class TelegramPolling implements MessagingTransport {
   private abort = new AbortController()
   private task?: Promise<void>
   private offset = 0
-  constructor(private bot: Telegraf<Context>, private registerCommands = true) {
+  constructor(private bot: Telegraf<Context>) {
     for (const { command } of chatCommands) {
       bot.command(command, ctx => this.receive(ctx, `!${command === "cancel_recovery" ? "cancel-recovery" : command}${ctx.payload ? ` ${ctx.payload}` : ""}`))
     }
@@ -37,7 +37,7 @@ export class TelegramPolling implements MessagingTransport {
       const webhook = await this.bot.telegram.getWebhookInfo()
       if (webhook.url) throw new Error("webhook configured")
       this.bot.botInfo = await this.bot.telegram.getMe()
-      if (this.registerCommands) await this.bot.telegram.setMyCommands([...chatCommands])
+      await this.bot.telegram.setMyCommands([...chatCommands])
     } catch {
       throw new Error("Telegram polling setup failed; check credentials and remove any existing webhook manually")
     }
