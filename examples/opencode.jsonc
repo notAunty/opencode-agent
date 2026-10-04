@@ -27,6 +27,6 @@
       ]
     }
   },
-  "compaction": { "auto": true, "keep": { "tokens": 8000 }, "buffer": 20000 },
+  "compaction": { "auto": true, "keep": { "tokens": 40009 }, "buffer": 50000 },
   "tool_output": { "max_lines": 500, "max_bytes": 20000 }
 }
