@@ -190,6 +190,19 @@ API failures produce sanitized chat notifications. Optional `usageResetRecovery`
 
 Recovery asks the agent to inspect unfinished task notes rather than replay the failed prompt. It waits for a fresh reset failure between successful admissions. New user activity or `!cancel-recovery` cancels it
 
+### Missing-message diagnostics
+
+Server logs emit JSON stages without message text, tokens, or raw error payloads. Follow `slack.received` → `slack.routing` → `chat.staged` → `native.admitted` → `native.context.observed`. Matching `ref` values correlate transport stages; `chat.staged` supplies the native message ID whose SHA-256 prefix is the native-stage `ref`
+
+- `slack.filtered`: intentionally ignored event, with reason
+- `chat.routing.failed`: authorization, attachment, routing, or staging failure
+- `native.admission.uncertain`: request failed or timed out; message may already be queued. Automatic admission retries retain the same native ID
+- `native.admission.confirmed_by_context`: matching native user message confirms admission after an uncertain response; no replay needed
+- `native.admission.paused`: five failed confirmations; inspect `!status` before requesting a retry
+- `native.assistant.completed` / `native.session.idle`: session execution signals, correlated by `sessionRef`; they do not establish completion of a particular input
+
+Native admission means queued, not executed. A queued message may not yet appear in active context. Missing context observation alone does not prove loss, especially after compaction. Do not resend message text with a new ID to diagnose an uncertain admission
+
 ## Permissions and limitations
 
 - **Agent has full permissions.** Chat authorization limits who can prompt a session, not what that agent can do. Restrict native permissions yourself if needed

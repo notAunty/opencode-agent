@@ -29,8 +29,8 @@ async function fixture() {
   const service = new AgentSessions({ get: async () => structuredClone(state), set: async (_, value) => { state = structuredClone(value) } }, sessions, transport)
   await service.create({ id: "jarvis", allowedUsers: ["slack:USER"] })
   transport.attach(new ChatRouter(service, new Timers(join(directory, "timers.json")), directory))
-  const emit = async (type: string, event?: Record<string, unknown>, body = {}) => {
-    socket.emit(type, { event, body, ack: async () => { acks++ } })
+  const emit = async (type: string, event?: Record<string, unknown>, body = {}, ackFails = false) => {
+    socket.emit(type, { event, body, ack: async () => { acks++; if (ackFails) throw new Error("synthetic ack failure") } })
     await new Promise<void>(resolve => setImmediate(resolve))
   }
   return { transport, service, emit, prompts, posts, lifecycle: () => ({ starts, stops, acks }) }
@@ -49,6 +49,19 @@ test("Slack Socket Mode links DMs, checks authorization and suppresses duplicate
     assert.deepEqual(f.prompts, ["hello"])
   } finally { await f.transport.stop() }
   assert.deepEqual(f.lifecycle(), { starts: 1, stops: 1, acks: 5 })
+})
+
+test("Slack acknowledgement failure does not discard a received message; redelivery stays deduplicated", async () => {
+  const f = await fixture()
+  await f.transport.start()
+  try {
+    await f.emit("message", { type: "message", channel: "DM", channel_type: "im", user: "USER", ts: "1", text: "!agent jarvis" })
+    const event = { type: "message", channel: "DM", channel_type: "im", user: "USER", ts: "2", text: "keep this input" }
+    await f.emit("message", event, {}, true)
+    await f.emit("message", event)
+    await f.service.tick()
+    assert.deepEqual(f.prompts, ["keep this input"])
+  } finally { await f.transport.stop() }
 })
 test("Slack socket slash commands bind channels without a webhook; unrelated channel messages are ignored", async () => {
   const f = await fixture()

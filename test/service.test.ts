@@ -17,7 +17,7 @@ function fixture() {
   }
   const messenger = { post: async (conversation: string, text: string) => { replies.push({ conversation, text }) } }
   const make = (namespace = "octg") => new AgentSessions(storage, sessions, messenger, () => now, true, namespace)
-  return { make, prompts, replies, messages, created, fail: (value: boolean) => { failed = value }, failSession: (id: string) => { failedSession = id }, advance: (ms: number) => { now += ms } }
+  return { make, prompts, replies, messages, created, sessions, messenger, fail: (value: boolean) => { failed = value }, failSession: (id: string) => { failedSession = id }, advance: (ms: number) => { now += ms } }
 }
 
 test("each Agent Session has its own authorization and linked native session", async () => {
@@ -107,4 +107,95 @@ test("failed Agent Session admission does not block others; revoked file notices
   await service.accept("alice", "first", "a"); await service.accept("bob", "second", "b")
   await service.tick(); assert.equal(f.prompts.length, 1)
   assert.match(JSON.stringify(f.prompts), /second/)
+})
+
+test("slow outbound delivery does not block durable staging or native admission", { timeout: 2000 }, async () => {
+  const f = fixture(); const service = f.make()
+  await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  await service.link("alice", "telegram:chat", "telegram:1")
+  let release!: () => void; let started!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const delivering = new Promise<void>(resolve => { started = resolve })
+  f.messenger.post = async () => { started(); await blocked }
+  await service.sendFile("alice", { uri: "file:///synthetic.png" }, "outbound")
+  const tick = service.tick()
+  try {
+    await delivering
+    await service.accept("alice", "new input", "new", "telegram:1")
+    await service.admit()
+    assert.equal(f.prompts.length, 1)
+    assert.deepEqual((await service.status("alice")).pending, [])
+  } finally { release(); await tick }
+})
+
+test("native admission permits concurrent staging and hooks without overwriting state", { timeout: 2000 }, async () => {
+  const f = fixture(); const service = f.make()
+  await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  let release!: () => void; let started!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const admitting = new Promise<void>(resolve => { started = resolve })
+  f.sessions.prompt = async input => { await service.localActivity(input.sessionID); started(); await blocked; f.prompts.push(input) }
+  await service.accept("alice", "first", "first", "telegram:1")
+  const tick = service.tick()
+  try {
+    await admitting
+    await service.accept("alice", "second", "second", "telegram:1")
+    assert.equal((await service.status("alice")).pending.length, 2)
+  } finally { release(); await tick }
+  assert.equal((await service.status("alice")).pending.length, 1)
+  await service.tick()
+  assert.equal(f.prompts.length, 2)
+})
+
+test("uncertain admission retries the same native ID without replaying a queued message", async () => {
+  const f = fixture(); const service = f.make()
+  await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  const queued = new Set<string>(); const attempts: string[] = []
+  f.sessions.prompt = async input => {
+    attempts.push(input.id)
+    if (queued.has(input.id)) return
+    queued.add(input.id)
+    throw new DOMException("synthetic timeout after admission", "TimeoutError")
+  }
+  const saved = await service.accept("alice", "already queued", "same", "telegram:1")
+  await service.tick()
+  assert.equal((await service.status("alice")).pending.length, 1)
+  f.advance(60_000); await service.tick()
+  assert.deepEqual(attempts, [saved.id, saved.id])
+  assert.equal(queued.size, 1)
+  assert.equal((await service.accept("alice", "redelivery", "same", "telegram:1")).duplicate, true)
+  assert.equal((await service.status("alice")).pending.length, 0)
+})
+
+test("diagnostics distinguish queue admission, context observation and assistant completion", async () => {
+  const f = fixture(); const service = f.make()
+  await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  const lines: string[] = []; const original = console.error
+  console.error = line => { lines.push(String(line)) }
+  try {
+    const saved = await service.accept("alice", "private input text", "diagnostic", "telegram:1")
+    await service.tick()
+    assert.ok(lines.some(line => JSON.parse(line).stage === "native.admitted"))
+    assert.ok(!lines.some(line => JSON.parse(line).stage === "native.assistant.completed"))
+    f.messages.push({ id: saved.id, type: "user", time: { created: 1001 } })
+    f.messages.push({ id: "reply", type: "assistant", time: { created: 1001, completed: 1002 }, finish: "stop" })
+    await service.reconcile(); await service.reconcile()
+    const stages = lines.map(line => JSON.parse(line).stage)
+    assert.equal(stages.filter(stage => stage === "native.context.observed").length, 1)
+    assert.equal(stages.filter(stage => stage === "native.assistant.completed").length, 1)
+    assert.doesNotMatch(lines.join("\n"), /private input text/)
+  } finally { console.error = original }
+})
+
+test("native context confirms an uncertain admission without replay", async () => {
+  const f = fixture(); const service = f.make()
+  await service.create({ id: "alice", allowedUsers: ["telegram:1"] })
+  const saved = await service.accept("alice", "queued", "confirmed", "telegram:1")
+  f.fail(true); await service.tick()
+  f.messages.push({ id: saved.id, type: "user", time: { created: 1001 } })
+  await service.reconcile()
+  assert.equal((await service.status("alice")).pending.length, 0)
+  f.fail(false); f.advance(60_000); await service.tick()
+  assert.equal(f.prompts.length, 0)
+  assert.equal((await service.accept("alice", "redelivery", "confirmed", "telegram:1")).duplicate, true)
 })

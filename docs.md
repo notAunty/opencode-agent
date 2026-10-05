@@ -105,7 +105,7 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 - Seed commit: `8222380`, exactly the three required documents, on orphan branch `v2`
 - Domain interfaces, Agent Session registry, authorization, durable staged inbox/outbox, bounded memory files, and JSON timer services implemented
 - OpenCode plugin hooks, tools, RPC, event lifecycle, and official Chat SDK wiring implemented
-- Docker verification passes strict typechecking, 29 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
+- Docker verification passes strict typechecking, 36 synthetic tests, compilation, and the real OpenCode V2 SDK fixture, including native storage and timer persistence across restart
 - Synthetic webhook fixtures verify Slack signatures, Telegram secrets, and Discord Ed25519 signatures without bot connections
 - Browser research completed: prefer native V2 browser tools, with disabled-by-default Playwriter MCP for existing local Chrome; no host activation
 - Do not use ignored V1 `node_modules`, `.env`, configuration, or data when resuming
@@ -114,6 +114,9 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 
 - Chat SDK native slash handlers, Slack socket commands and Telegraf command handlers share command authorization and timer logic. Telegram menu publication is automatic; Slack and Discord require external command setup. No development run registers real commands
 - Slack acknowledges socket envelopes before routing to satisfy the platform deadline. An acknowledged event may be lost if the process crashes before durable staging. The socket library reconnects transport connections; outgoing Web API retries are disabled so application outbox policy owns retries
+- A failed socket acknowledgement is logged but does not discard the received event; redelivery uses the same durable admission ID
+- State mutations use a short serial lock; native admission and outbound delivery run outside it, with separate dispatch/delivery serialization. New messages can be saved and admitted while outgoing posts are slow
+- JSON diagnostics distinguish receipt, filtering, authorization, staging, uncertain/confirmed admission, native context observation, and session execution signals without logging message bodies or credentials. Session execution signals do not prove a particular input completed
 - Telegraf polling checks for an existing webhook and refuses to replace it. It uses abortable `getUpdates` requests rather than `launch()`, which would delete deployment-owned webhook configuration. Offsets advance after update handling; native admission IDs and durable inbox state limit duplicate prompts on redelivery. This is not an exactly-once transport
 
 - The plugin runs while its OpenCode project location is active; minute timers are not an OS scheduler. Due timers are admitted on restart

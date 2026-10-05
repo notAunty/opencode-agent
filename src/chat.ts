@@ -14,6 +14,7 @@ import { uploadedFile } from "./transfers.js"
 import { projectPath } from "./files.js"
 import { chatCommands, registerTelegramCommands } from "./commands.js"
 import type { MessagingTransport } from "./transport.js"
+import { errorFields, trace } from "./diagnostics.js"
 
 export interface ChatOptions {
   enabled: boolean
@@ -68,6 +69,7 @@ export class ChatRouter {
         const original = thread
         thread = { id, post: original.post.bind(original), subscribe: () => original.subscribe() }
       }
+      trace("chat.route.selected", message.id)
       if (text === "!status") { await thread.post(JSON.stringify(await this.service.status(god.id, actor))); return }
       if (text === "!timers") { await thread.post(JSON.stringify(await this.timers.list(god.id))); return }
       if (text.startsWith("!cancel ")) { await thread.post(await this.timers.cancel(god.id, text.slice(8).trim()) ? "Timer cancelled" : "Timer not found"); return }
@@ -86,13 +88,20 @@ export class ChatRouter {
       }
       if (text.startsWith("!")) { await thread.post("Commands: !agent <id>, !status, !wake <seconds|ISO time> <prompt>, !timers, !cancel <id>, !cancel-recovery, !stop, !retry, !unlink"); return }
       // Authorization precedes adapter-controlled download, avoiding unauthorized file and URL fetches
+      trace("chat.authorized", message.id)
+      trace("chat.attachments.started", message.id, { count: message.attachments.length })
       const files = await this.attachments(message)
-      await this.service.accept(god.id, text || "Please inspect the attached files", `chat:${thread.id}:${message.id}`, actor, files)
+      trace("chat.staging.started", message.id)
+      const admission = await this.service.accept(god.id, text || "Please inspect the attached files", `chat:${thread.id}:${message.id}`, actor, files)
+      trace("chat.staged", message.id, { nativeID: admission.id, duplicate: admission.duplicate })
       this.changed()
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Request failed"
-      const safe = /access denied|not linked|Specify|Use !wake|Invalid timer|Absolute time|too large|inbox is full|Unsupported attachment/.test(message)
-      await thread.post(safe ? message : "Request could not be saved. Check the OpenCode session and retry; no completed actions were replayed")
+      const reason = error instanceof Error && /access denied/.test(error.message) ? "access_denied"
+        : error instanceof Error && /not linked/.test(error.message) ? "not_linked" : "request_failed"
+      trace("chat.routing.failed", message.id, { reason, ...errorFields(error) })
+      const explanation = error instanceof Error ? error.message : "Request failed"
+      const safe = /access denied|not linked|Specify|Use !wake|Invalid timer|Absolute time|too large|inbox is full|Unsupported attachment/.test(explanation)
+      await thread.post(safe ? explanation : "Request could not be saved. Check the OpenCode session and retry; no completed actions were replayed")
     }
   }
   private async attachments(message: Pick<Message, "attachments">): Promise<FileInput[]> {

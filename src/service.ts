@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { z } from "zod"
 import { godID } from "./files.js"
 import { errorNotice } from "./errors.js"
+import { errorFields, trace, traceRef } from "./diagnostics.js"
 import { json, Serial, type FileInput, type AgentSession, type Messenger, type Sessions, type State, type Storage } from "./contracts.js"
 
 const identity = z.string().regex(/^(telegram|slack|discord):[^\s:]+$/)
@@ -9,7 +10,7 @@ const binding = z.object({ id: z.string().min(1), linkedBy: identity })
 const file = z.object({ uri: z.string(), mime: z.string().optional(), filename: z.string().optional() })
 export const agentSessionSchema = z.object({ id: z.string().regex(godID), sessionID: z.string().startsWith("ses"),
   allowedUsers: z.array(identity).min(1), conversations: z.array(binding), createdAt: z.number(), revision: z.number() })
-export const statusSchema = z.object({ id: z.string(), sessionID: z.string(), pending: z.array(z.object({ id: z.string(), attempts: z.number() })),
+export const statusSchema = z.object({ id: z.string(), sessionID: z.string(), pending: z.array(z.object({ id: z.string(), attempts: z.number(), dueAt: z.number(), paused: z.boolean() })),
   pendingNotices: z.number(), recovery: z.array(z.object({ agentId: z.string(), dueAt: z.number(), revision: z.number(), attempts: z.number(), awaitingResult: z.boolean().optional() })) })
 const stateSchema = z.object({
   version: z.literal(1),
@@ -24,7 +25,10 @@ export const createAgentInput = z.object({ id: z.string().regex(godID), allowedU
 export const nativeID = (prefix: "msg" | "ses", key: string): string => `${prefix}_${createHash("sha256").update(key).digest("hex").slice(0, 32)}`
 
 export class AgentSessions {
+  // External requests must not block durable staging or re-entering session hooks
   private lock = new Serial()
+  private dispatch = new Serial()
+  private delivery = new Serial()
   constructor(private storage: Storage, private sessions: Sessions, private messenger: Messenger,
     private now = Date.now, private recoveryEnabled = false, private namespace = "octg") {}
   private async read(): Promise<State> {
@@ -103,17 +107,19 @@ export class AgentSessions {
       await this.save(state)
     })
   }
-  accept(id: string, text: string, key: string = randomUUID(), actor?: string, files: FileInput[] = []): Promise<void> {
+  accept(id: string, text: string, key: string = randomUUID(), actor?: string, files: FileInput[] = []): Promise<{ id: string; duplicate: boolean }> {
     if (text.length > 32_000 || files.length > 8) throw new Error("Prompt is too large")
     return this.lock.run(async () => {
       const state = await this.read(); const god = this.find(state, id, actor)
       const messageID = nativeID("msg", `${this.namespace}:${id}:${key}`)
-      if (state.seen[`input:${messageID}`] || state.pending.some(p => p.id === messageID)) return
+      if (state.seen[`input:${messageID}`] || state.pending.some(p => p.id === messageID)) return { id: messageID, duplicate: true }
       if (state.pending.filter(p => p.godId === id).length >= 100) throw new Error("Agent inbox is full; retry after queued work drains")
       god.revision++
       state.recoveries = state.recoveries.filter(r => r.godId !== id)
       state.pending.push({ id: messageID, godId: id, text, files, dueAt: this.now(), attempts: 0, ...(actor ? { actor } : {}) })
       await this.save(state)
+      trace("inbox.saved", messageID)
+      return { id: messageID, duplicate: false }
     })
   }
   async admitTimer(id: string, timerID: string, text: string): Promise<void> {
@@ -170,7 +176,7 @@ export class AgentSessions {
   }
   async status(id: string, actor?: string): Promise<z.infer<typeof statusSchema>> {
     const state = await this.read(); const god = this.find(state, id, actor)
-    return { id: god.id, sessionID: god.sessionID, pending: state.pending.filter(p => p.godId === id).map(p => ({ id: p.id, attempts: p.attempts })),
+    return { id: god.id, sessionID: god.sessionID, pending: state.pending.filter(p => p.godId === id).map(p => ({ id: p.id, attempts: p.attempts, dueAt: p.dueAt, paused: p.attempts >= 5 })),
       pendingNotices: state.notices.filter(n => n.godId === id).length, recovery: state.recoveries.filter(r => r.godId === id).map(({ godId, ...recovery }) => ({ agentId: godId, ...recovery })) }
   }
   retry(id: string, actor?: string): Promise<void> {
@@ -185,49 +191,97 @@ export class AgentSessions {
       await this.save(state)
     })
   }
-  tick(): Promise<void> {
-    return this.lock.run(async () => {
-      const state = await this.read()
-      for (const pending of [...state.pending]) {
-        if (pending.dueAt > this.now() || pending.attempts >= 5) continue
-        const god = state.gods.find(g => g.id === pending.godId)
-        if (!god || (pending.actor && !god.allowedUsers.includes(pending.actor))) {
-          state.pending = state.pending.filter(p => p.id !== pending.id); continue
-        }
-        // Preserve per-session order when the first queued request cannot be admitted
-        if (state.pending.find(p => p.godId === pending.godId)?.id !== pending.id) continue
+  async tick(): Promise<void> {
+    await Promise.all([this.admit(), this.deliver()])
+  }
+  admit(): Promise<void> {
+    return this.dispatch.run(async () => {
+      for (const candidate of (await this.read()).pending) {
+        const work = await this.lock.run(async () => {
+          const state = await this.read()
+          const pending = state.pending.find(p => p.id === candidate.id)
+          if (!pending || pending.dueAt > this.now() || pending.attempts >= 5) return
+          const god = state.gods.find(g => g.id === pending.godId)
+          if (!god || (pending.actor && !god.allowedUsers.includes(pending.actor))) {
+            state.pending = state.pending.filter(p => p.id !== pending.id)
+            await this.save(state)
+            trace("inbox.revoked", pending.id)
+            return
+          }
+          if (state.pending.find(p => p.godId === pending.godId)?.id !== pending.id) return
+          return { pending, god }
+        })
+        if (!work) continue
+        const { pending, god } = work
+        let failed = false
+        trace("native.admission.started", pending.id, { attempt: pending.attempts + 1, sessionRef: traceRef(god.sessionID) })
         try {
           await this.sessions.prompt({ sessionID: god.sessionID, id: pending.id, text: pending.text, files: pending.files })
-          state.pending = state.pending.filter(p => p.id !== pending.id)
-          state.seen[`input:${pending.id}`] = this.now()
-        } catch {
-          pending.attempts++; pending.dueAt = this.now() + Math.min(60_000, 1000 * 2 ** pending.attempts)
-          this.notice(state, god, "OpenCode could not admit your message. It remains saved; use !status or !retry to inspect/retry it", `admission:${pending.id}`)
+          trace("native.admitted", pending.id)
+        } catch (error) {
+          failed = true
+          trace("native.admission.uncertain", pending.id, errorFields(error))
         }
-        await this.save(state)
+        await this.lock.run(async () => {
+          const state = await this.read()
+          const current = state.pending.find(p => p.id === pending.id)
+          if (!failed) {
+            state.pending = state.pending.filter(p => p.id !== pending.id)
+            state.seen[`input:${pending.id}`] = this.now()
+          } else if (current) {
+            current.attempts++; current.dueAt = this.now() + Math.min(60_000, 1000 * 2 ** current.attempts)
+            const agent = this.find(state, god.id)
+            this.notice(state, agent, "Native admission was not confirmed. Your message remains saved with the same ID; use !status to inspect it. It may already be queued", `admission:${pending.id}`)
+            if (current.attempts >= 5) trace("native.admission.paused", pending.id)
+          }
+          await this.save(state)
+        })
       }
-      for (const recovery of state.recoveries) {
+      for (const recovery of (await this.read()).recoveries) {
         if (recovery.dueAt > this.now() || recovery.attempts >= 3 || recovery.awaitingResult) continue
-        const god = state.gods.find(g => g.id === recovery.godId && g.revision === recovery.revision)
+        const god = (await this.read()).gods.find(g => g.id === recovery.godId && g.revision === recovery.revision)
         if (!god) continue
+        let admitted = false
         try {
           await this.sessions.prompt({ sessionID: god.sessionID, id: nativeID("msg", `recovery:${this.namespace}:${god.id}:${recovery.revision}:${recovery.attempts}`),
             text: "Provider reset recovery check: inspect your current TASKS notes and completed actions first. Continue only unfinished, still-requested work. Do not replay completed side effects" })
-          recovery.attempts++; recovery.awaitingResult = true
-        } catch { recovery.attempts++; recovery.dueAt = this.now() + 60_000 }
-        await this.save(state)
+          admitted = true
+        } catch {}
+        await this.lock.run(async () => {
+          const state = await this.read()
+          const current = state.recoveries.find(r => r.godId === recovery.godId && r.revision === recovery.revision && r.attempts === recovery.attempts)
+          if (!current) return
+          current.attempts++
+          if (admitted) current.awaitingResult = true
+          else current.dueAt = this.now() + 60_000
+          await this.save(state)
+        })
       }
-      for (const notice of [...state.notices]) {
+    })
+  }
+  private deliver(): Promise<void> {
+    return this.delivery.run(async () => {
+      for (const notice of (await this.read()).notices) {
         if (notice.dueAt > this.now()) continue
-        const god = state.gods.find(g => g.id === notice.godId)
+        const god = (await this.read()).gods.find(g => g.id === notice.godId)
         if (!god?.conversations.some(c => c.id === notice.conversation && god.allowedUsers.includes(c.linkedBy))) {
-          state.notices = state.notices.filter(n => n.id !== notice.id); continue
+          await this.lock.run(async () => {
+            const state = await this.read(); state.notices = state.notices.filter(n => n.id !== notice.id); await this.save(state)
+          })
+          continue
         }
-        try { await this.messenger.post(notice.conversation, notice.text, notice.file); state.notices = state.notices.filter(n => n.id !== notice.id) }
-        catch { notice.attempts++; notice.dueAt = this.now() + Math.min(300_000, 1000 * 2 ** Math.min(notice.attempts, 10)) }
-        await this.save(state)
+        let delivered = false
+        try { await this.messenger.post(notice.conversation, notice.text, notice.file); delivered = true }
+        catch (error) { trace("outbox.delivery.failed", notice.id, errorFields(error)) }
+        await this.lock.run(async () => {
+          const state = await this.read()
+          const current = state.notices.find(n => n.id === notice.id)
+          if (!current) return
+          if (delivered) state.notices = state.notices.filter(n => n.id !== notice.id)
+          else { current.attempts++; current.dueAt = this.now() + Math.min(300_000, 1000 * 2 ** Math.min(current.attempts, 10)) }
+          await this.save(state)
+        })
       }
-      await this.save(state)
     })
   }
   async reconcile(): Promise<void> {
@@ -240,9 +294,19 @@ export class AgentSessions {
         const state = await this.read(); const current = this.find(state, god.id)
         for (const approval of approvals) this.notice(state, current, "Agent is waiting for approval. Review it in the native OpenCode CLI or web session; chat cannot grant permissions", `approval:${approval.id}`)
         for (const message of messages) {
+          if (message.type === "user" && state.pending.some(p => p.id === message.id && p.godId === god.id)) {
+            state.pending = state.pending.filter(p => p.id !== message.id)
+            state.seen[`input:${message.id}`] = this.now()
+            trace("native.admission.confirmed_by_context", message.id)
+          }
+          if (message.type === "user" && state.seen[`input:${message.id}`] && !state.seen[`observed:${message.id}`]) {
+            trace("native.context.observed", message.id, { sessionRef: traceRef(god.sessionID) })
+            state.seen[`observed:${message.id}`] = this.now()
+          }
           if (message.type !== "assistant" || !message.time?.completed || message.time.created < current.createdAt) continue
           if (state.seen[`processed:${message.id}`]) continue
           state.seen[`processed:${message.id}`] = this.now()
+          trace("native.assistant.completed", message.id, { failed: Boolean(message.error), sessionRef: traceRef(god.sessionID) })
           if (message.error) this.notice(state, current, errorNotice(message.error.status, message.error.type), `terminal:${message.id}`)
           else if (message.finish !== "tool-calls") {
             const text = message.content?.filter(c => c.type === "text").map(c => c.text ?? "").join("\n").trim()

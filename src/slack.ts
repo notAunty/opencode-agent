@@ -6,6 +6,7 @@ import type { FileInput } from "./contracts.js"
 import type { MessagingTransport } from "./transport.js"
 import { uploadedFile } from "./transfers.js"
 import { chatCommands } from "./commands.js"
+import { errorFields, trace } from "./diagnostics.js"
 
 interface SlackEvent {
   type: string; channel: string; user?: string; text?: string; ts: string; thread_ts?: string
@@ -36,7 +37,7 @@ export class SlackSocket implements MessagingTransport {
     for (const type of ["message", "app_mention", "slash_commands"]) {
       socket.on(type, (envelope: Envelope) => {
         if (this.stopping) return
-        const task = this.receive(envelope).catch(() => { console.error("octg: Slack handler failed; inspect the saved inbox") })
+        const task = this.receive(envelope).catch(error => { trace("slack.handler.failed", envelope.event?.ts ?? envelope.body.trigger_id ?? "unknown", errorFields(error)) })
         this.tasks.add(task)
         void task.finally(() => this.tasks.delete(task))
       })
@@ -73,20 +74,23 @@ export class SlackSocket implements MessagingTransport {
     }
   }
   private async receive({ ack, event, body }: Envelope): Promise<void> {
+    const key = event?.ts ?? body.trigger_id ?? "unknown"
+    trace("slack.received", key)
     // Slack's acknowledgement deadline is independent of durable admission and attachment downloads
-    await ack()
-    if (!this.router || this.stopping) return
+    try { await ack(); trace("slack.acknowledged", key) }
+    catch (error) { trace("slack.ack.failed", key, errorFields(error)) }
+    if (!this.router || this.stopping) { trace("slack.filtered", key, { reason: "unavailable_or_stopping" }); return }
     const command = body.command?.slice(1)
     if (command) {
-      if (!chatCommands.some(entry => entry.command === command) || !body.user_id || !body.channel_id) return
+      if (!chatCommands.some(entry => entry.command === command) || !body.user_id || !body.channel_id) { trace("slack.filtered", key, { reason: "unsupported_command" }); return }
       await this.route(`slack:${body.channel_id}:`, body.user_id, body.trigger_id ?? "slash-command",
         `!${command === "cancel_recovery" ? "cancel-recovery" : command}${body.text ? ` ${body.text}` : ""}`, [])
       return
     }
-    if (!event?.user || event.bot_id || event.user === this.userID || event.subtype && event.subtype !== "file_share") return
+    if (!event?.user || event.bot_id || event.user === this.userID || event.subtype && event.subtype !== "file_share") { trace("slack.filtered", key, { reason: "bot_or_unsupported_event" }); return }
     const root = `slack:${event.channel}:`
     const id = event.channel_type === "im" && !event.thread_ts ? root : `slack:${event.channel}:${event.thread_ts ?? event.ts}`
-    if (event.channel_type !== "im" && event.type !== "app_mention" && !await this.router.linked(id) && !await this.router.linked(root)) return
+    if (event.channel_type !== "im" && event.type !== "app_mention" && !await this.router.linked(id) && !await this.router.linked(root)) { trace("slack.filtered", key, { reason: "unlinked_channel" }); return }
     const attachments: Attachment[] = (event.files ?? []).map(file => ({
       type: file.mimetype?.startsWith("image/") ? "image" : "file", mimeType: file.mimetype, name: file.name, size: file.size,
       fetchData: async () => {
@@ -104,10 +108,11 @@ export class SlackSocket implements MessagingTransport {
       },
     }))
     const text = (event.text ?? "").replace(new RegExp(`<@${this.userID}>\\s*`, "g"), "").trim()
-    if (!text && !attachments.length) return
+    if (!text && !attachments.length) { trace("slack.filtered", key, { reason: "empty" }); return }
     await this.route(id, event.user, event.ts, text, attachments)
   }
   private async route(id: string, user: string, key: string, text: string, attachments: Attachment[]): Promise<void> {
+    trace("slack.routing", key)
     await this.router!.handle({ id, subscribe: async () => {}, post: value => this.post(id, value) }, {
       id: key, text, attachments, author: { userId: user, userName: user, fullName: user, isBot: false, isMe: false },
     })

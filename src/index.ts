@@ -13,6 +13,7 @@ import { Octg } from "./rpc.js"
 import type { Sessions } from "./contracts.js"
 import { captureFile } from "./transfers.js"
 import { environment } from "./environment.js"
+import { errorFields, trace } from "./diagnostics.js"
 
 const optionsSchema = z.object({
   envFile: z.string().min(1).optional(),
@@ -118,17 +119,31 @@ export default Plugin.define({
     let stopped = false
     let requested = false
     let running: Promise<void> | undefined
+    let admissionRequested = false
+    let admission: Promise<void> | undefined
+    const admitNow = (): void => {
+      if (stopped) return
+      if (admission) { admissionRequested = true; return }
+      admission = service.admit().catch(error => trace("native.dispatch.failed", directory, errorFields(error))).finally(() => {
+        admission = undefined
+        if (admissionRequested) { admissionRequested = false; admitNow() }
+      })
+    }
     const cycle = () => {
       if (stopped) return
-      if (running) { requested = true; return }
+      if (running) {
+        requested = true
+        admitNow()
+        return
+      }
       running = (async () => {
-        for (const work of [
+        await Promise.all([
           () => timers.tick(timer => service.admitTimer(timer.agentId, timer.id, timer.prompt)),
           () => service.reconcile(),
           () => service.tick(),
-        ]) {
-          try { await work() } catch { console.error("octg: background operation failed; durable state retained") }
-        }
+        ].map(async work => {
+          try { await work() } catch (error) { trace("background.operation.failed", directory, errorFields(error)) }
+        }))
       })().catch(() => console.error("octg: background cycle failed; durable state retained")).finally(() => {
         running = undefined
         if (requested) { requested = false; cycle() }
@@ -150,6 +165,7 @@ export default Plugin.define({
               const session = await ctx.session.get({ sessionID: sid(event.data.sessionID) })
               const god = await resolveGod(session.id)
               if (!god) return
+              trace("native.session.idle", session.id)
               if (session.id !== god.sessionID && session.outcome) await service.taskOutcome(god.id, session.id, session.outcome, session.time.updated)
               cycle()
             })())
@@ -164,6 +180,6 @@ export default Plugin.define({
     const timer = setInterval(cycle, 60_000)
     timer.unref()
     cycle()
-    return async () => { stopped = true; events.abort(); clearInterval(timer); await eventLoop; await Promise.allSettled(eventWork); await running; await bridge.stop() }
+    return async () => { stopped = true; events.abort(); clearInterval(timer); await eventLoop; await Promise.allSettled(eventWork); await running; await admission; await bridge.stop() }
   },
 })
