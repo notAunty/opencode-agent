@@ -1,6 +1,6 @@
 {
   "name": "@notaunty/opencode-agent",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "OpenCode V2 Agent Sessions with Vercel Chat SDK transports and durable wake timers",
   "repository": {
     "type": "git",
