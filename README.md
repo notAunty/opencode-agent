@@ -32,7 +32,7 @@ Open the returned `sessionID` in CLI or web to continue the same conversation. T
 
 - **Multi-channel conversations** through the Chat SDK adapter ecosystem, with Telegram, Slack, and Discord as first-class integrations
 - **Independent Agent Sessions** with separate conversations, task notes, timers, and user allowlists
-- **Shared personality and memory** through project instructions and `MEMORY.md`, with short-term notes in `TASKS/<agentId>.md`
+- **Shared personality and memory** through project instructions and `MEMORY.md`, with dated task notes and per-session indexes in `TASKS/`
 - **Native background workers and compaction** without a second agent runtime
 - **Durable wake timers** checked every minute, queued when due, and cancellable by ID
 - **API-error notifications** with optional bounded recovery after a provider supplies a usage-reset time
@@ -172,7 +172,13 @@ Slack slash commands operate at channel level, not within a particular message t
 
 ### Memory and timers
 
-Agent Sessions share the project directory and `MEMORY.md`; each has its own `TASKS/<agentId>.md`. Bounded notes are included in model context and native compaction requests. The `octg_save_memory` tool saves these notes
+Agents use native file edits for memory and task notes:
+
+- `MEMORY.md`: shared, lasting facts
+- `TASKS/YYMMDD-task-name.md`: concise task progress, decisions, and next steps, such as `TASKS/261003-task-name.md`
+- `TASKS/<agentId>.md`: a short index of that session's task files and next steps
+
+Only bounded shared memory and the corresponding session's index are injected into model context and native compaction. Agents read relevant dated task files as needed; no dedicated memory-writing tool is required
 
 Timers persist in `.octg/timers.json`. The plugin checks them every minute and queues saved prompts into the target session. `octg_wake` schedules a timer from the agent itself
 

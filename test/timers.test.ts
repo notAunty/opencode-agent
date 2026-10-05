@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Timers } from "../src/timers.js"
@@ -23,15 +23,22 @@ test("durable one-shot timers isolate Agent Sessions, cancel and retry failed ad
   assert.deepEqual(ids, [a.id]); assert.equal((await timers.list("alice")).length, 0)
   assert.equal(JSON.parse(await readFile(path, "utf8")).version, 1)
 })
-test("shared memory is bounded and task files are Agent Session-specific", async () => {
+test("native file edits update bounded memory and session-specific task indexes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "octg-memory-")); const memory = new MemoryFiles(directory, 20)
-  await memory.save("shared"); await memory.save("alice task", "alice"); await memory.save("bob task", "bob")
-  assert.match(await memory.context("alice"), /shared/); assert.doesNotMatch(await memory.context("alice"), /bob task/)
-  await assert.rejects(memory.save("x".repeat(21)), /budget/)
-  assert.throws(() => memory.path("../bob"), /Invalid/)
+  await mkdir(join(directory, "TASKS"))
+  await writeFile(join(directory, "MEMORY.md"), "shared")
+  await writeFile(join(directory, "TASKS", "alice.md"), "261003-alice-task.md")
+  await writeFile(join(directory, "TASKS", "bob.md"), "bob task")
+  await writeFile(join(directory, "TASKS", "261003-alice-task.md"), "task details loaded only on demand")
+  const context = await memory.context("alice")
+  assert.match(context, /shared/); assert.match(context, /261003-alice-task.md/)
+  assert.doesNotMatch(context, /bob task|task details loaded only on demand/)
+  await writeFile(join(directory, "MEMORY.md"), "x".repeat(21))
+  assert.match(await memory.context("alice"), /x{20}\n\[Memory truncated/)
+  await assert.rejects(memory.context("../bob"), /Invalid/)
   const unsafe = await mkdtemp(join(tmpdir(), "octg-memory-symlink-"))
   await symlink(directory, join(unsafe, "TASKS"))
-  await assert.rejects(new MemoryFiles(unsafe).save("escape", "alice"), /symlink/)
+  await assert.rejects(new MemoryFiles(unsafe).context("alice"), /symlink/)
 })
 test("only bounded future Retry-After values authorize recovery", () => {
   assert.equal(resetTime(new Headers({ "retry-after": "60" }), 1000), 61_000)

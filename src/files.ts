@@ -53,21 +53,13 @@ export async function atomicWrite(path: string, text: string): Promise<void> {
 
 export class MemoryFiles {
   constructor(private directory: string, private maxBytes = 12_000) {}
-  path(id?: string): string {
-    if (id && !godID.test(id)) throw new Error("Invalid Agent Session ID")
-    return id ? join(this.directory, "TASKS", `${id}.md`) : join(this.directory, "MEMORY.md")
-  }
   async context(id: string): Promise<string> {
+    if (!godID.test(id)) throw new Error("Invalid Agent Session ID")
     const [memory, task] = await Promise.all([
       projectPath(this.directory, "MEMORY.md").then(path => readBounded(path, this.maxBytes)),
       projectPath(this.directory, "TASKS", `${id}.md`).then(path => readBounded(path, this.maxBytes)),
     ])
-    return `Shared long-term memory:\n${memory || "(empty)"}\n\nTask notes for ${id}:\n${task || "(empty)"}`
-  }
-  async save(text: string, id?: string): Promise<void> {
-    if (Buffer.byteLength(text) > this.maxBytes) throw new Error("Memory exceeds its byte budget; summarize first")
-    this.path(id)
-    await atomicWrite(await projectPath(this.directory, ...(id ? ["TASKS", `${id}.md`] : ["MEMORY.md"])), text)
+    return `Shared long-term memory:\n${memory || "(empty)"}\n\nTask index for ${id}:\n${task || "(empty)"}`
   }
 }
 

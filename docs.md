@@ -11,7 +11,8 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 - An Agent Session is an independent native primary OpenCode session. New sessions select the configured `Agent` agent; registration preserves an existing session's selected agent
 - The example `Agent` configuration allows all tools without approval prompts and is intended for trusted workspaces
 - All Agent Sessions use the same project directory, personality, and shared long-term `MEMORY.md`
-- Short-term memory is `TASKS/<agentId>.md`, loaded only for the corresponding Agent Session
+- Agents use native file edits for dated task notes in `TASKS/YYMMDD-task-name.md`, such as `TASKS/261003-task-name.md`
+- `TASKS/<agentId>.md` is a short session-specific index of task files and next steps, loaded only for the corresponding Agent Session
 - CLI, OpenCode web, and linked Chat SDK conversations address the same native session
 - Multiple conversations may be explicitly linked to an Agent Session
 - Every Agent Session has a mandatory, separate allowlist of platform-qualified identities, such as `telegram:123`, `slack:U123`, and `discord:123`
@@ -22,7 +23,8 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 ## Context management
 
 - Use native automatic compaction and a small recent-context retention budget
-- Inject bounded, current shared memory and only the target task notes into main model requests and compaction
+- Inject bounded, current shared memory and only the target session's task index into main model requests and compaction; read dated task files on demand
+- Memory and task notes use native file editing, not a dedicated memory-writing tool
 - Keep goals, constraints, decisions, pending work, and worker references in short-term notes
 - Preserve long-term facts deliberately in `MEMORY.md`, not by appending every transcript
 - Do not introduce DCP until V2 compatibility and additional benefit are demonstrated
