@@ -19,8 +19,11 @@ Start with Telegram. You need OpenCode with a working model provider and a Teleg
 4. Use a bot without an existing webhook; polling refuses to change one. Only one process may poll the same bot
 5. From an authenticated OpenCode client in that project, create a session using your Telegram user ID:
    ```sh
-   opencode api post /api/rpc/octg/create --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
+   LOCATION="location%5Bdirectory%5D=$(node -p 'encodeURIComponent(process.cwd())')"
+   opencode api post "/api/rpc/octg/create?$LOCATION" --data '{"input":{"id":"research","allowedUsers":["telegram:123"]}}'
+   opencode api post "/api/rpc/octg/list?$LOCATION" --data '{}'
    ```
+   Replace `123` with your numeric Telegram user ID. Check `allowedUsers` in the list output; change it through the [`allowlist` RPC](#owner-management-api). CLI/RPC interface exists; no dedicated settings UI yet
 6. Message your bot: `/agent research`, then send a normal message
 
 Open the returned `sessionID` in CLI or web to continue the same conversation. Try `/wake 3600 Review the unfinished research notes` to schedule a wake in one hour
@@ -53,7 +56,7 @@ The configuration defines **Agent** as a primary OpenCode agent with **full tool
 
 Use these commands in a linked **messaging app conversation**. They are not OpenCode TUI slash commands. In CLI/web, chat directly with the native session; use the owner RPC for session management
 
-Native slash commands use Chat SDK handlers on Telegram, Slack, and Discord. The existing `!command` syntax remains supported; `/cancel_recovery` corresponds to `!cancel-recovery`. Slash commands must be configured on Slack and Discord before they appear
+Native slash commands are available on Telegram, Slack, and Discord. The existing `!command` syntax remains supported; `/cancel_recovery` corresponds to `!cancel-recovery`. Slash commands must be configured on Slack and Discord before they appear
 
 | Command | Purpose |
 | --- | --- |
@@ -91,7 +94,7 @@ An already-running shared server cannot inherit a new client shell's environment
 
 Set `chat.enabled` to `true` and select platforms in `chat.platforms`. Telegram uses Telegraf long polling and Slack uses Socket Mode automatically; neither needs Redis or a public endpoint. Chat is disabled by default. Discord uses Chat SDK with `REDIS_URL` and a listener at `127.0.0.1:8787`
 
-Expose webhook routes through HTTPS and register them with each platform yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
+Expose Discord's webhook route through HTTPS and register it yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
 
 #### Telegram
 
@@ -99,6 +102,16 @@ Expose webhook routes through HTTPS and register them with each platform yoursel
 - Telegraf long polling uses only `TELEGRAM_BOT_TOKEN`
 - Polling uses outbound requests only, preserves existing webhooks, and stops gracefully with the plugin. Use one polling process per bot
 - Startup publishes commands through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands), replacing the default language-neutral menu. Registration does not alter webhooks or grant session access
+
+Authorize your numeric Telegram user ID before messaging the bot. From the agent project directory:
+
+```sh
+LOCATION="location%5Bdirectory%5D=$(node -p 'encodeURIComponent(process.cwd())')"
+opencode api post "/api/rpc/octg/list?$LOCATION" --data '{}'
+opencode api post "/api/rpc/octg/allowlist?$LOCATION" --data '{"input":{"agentId":"research","users":["telegram:123"]}}'
+```
+
+Replace the example session name and user ID with yours. This replaces the session's allowlist; keep all intended users in `users`, then send `/agent <session-name>`. See [Owner management API](#owner-management-api) for session creation and existing-session registration
 
 #### Slack
 
@@ -127,6 +140,16 @@ Optional scopes:
 - `files:read`, `files:write` for incoming attachments and outgoing artifacts
 
 No User Token Scopes are needed. Reinstall the app after changing scopes, then use its Bot User OAuth Token (`xoxb-…`) as `SLACK_BOT_TOKEN`. Event subscriptions and slash commands still require setup in Slack
+
+Authorize your Slack member ID (**your profile → More → Copy member ID**). From the agent project directory:
+
+```sh
+LOCATION="location%5Bdirectory%5D=$(node -p 'encodeURIComponent(process.cwd())')"
+opencode api post "/api/rpc/octg/list?$LOCATION" --data '{}'
+opencode api post "/api/rpc/octg/allowlist?$LOCATION" --data '{"input":{"agentId":"<AGENT_NAME>","users":["slack:U12345678"]}}'
+```
+
+Replace the example session name and member ID with yours. This replaces the session's allowlist; keep all intended users in `users`. DM `!agent <session-name>` afterward; no native slash-command registration is needed for `!commands`. Create or register the session first through the [Owner management API](#owner-management-api)
 
 To enable native slash commands:
 
@@ -174,3 +197,74 @@ Recovery asks the agent to inspect unfinished task notes rather than replay the 
 Use `octg_send_file` to send an explicitly selected project artifact to linked conversations. The owner RPC contract is exported as `@notaunty/opencode-agent/rpc`; see [src/rpc.ts](src/rpc.ts) for session management and timer methods
 
 See [docs.md](docs.md) for architecture and operational details, and [AGENTS.md](AGENTS.md) for development boundaries
+
+## Owner management API
+
+CLI/RPC interface exists; no dedicated settings UI yet. OpenCode hosts the plugin's `octg` RPC at `POST /api/rpc/octg/<method>`. Use an authenticated OpenCode client; `opencode api` handles the server connection and authentication. These are owner-management calls, not messaging-app commands. Examples use the session name `research`; substitute your own name and user IDs
+
+### Project location and request format
+
+The plugin's registry belongs to a project location. Pass `location[directory]` explicitly so requests reach the plugin in the correct directory. Omitting it can produce `rpc.unavailable` even when the plugin is active elsewhere
+
+Run from your agent project directory:
+
+```sh
+LOCATION="location%5Bdirectory%5D=$(node -p 'encodeURIComponent(process.cwd())')"
+```
+
+This uses Node to URL-encode the current absolute directory. For a remote server, use the directory path on that server instead. For example, `/absolute/path/to/agents` becomes:
+
+```text
+location%5Bdirectory%5D=%2Fabsolute%2Fpath%2Fto%2Fagents
+```
+
+Requests carry method arguments under `input`; methods without arguments use `{}`, not `{"input":null}`. The HTTP response wraps a method's return value under `output`. The plugin must be loaded successfully in the selected project before its RPC is available
+
+### Session creation and registration
+
+Create a new native session and authorize its chat users:
+
+```sh
+opencode api post "/api/rpc/octg/create?$LOCATION" \
+  --data '{"input":{"id":"research","allowedUsers":["slack:U12345678"]}}'
+```
+
+To register an existing primary OpenCode session instead, add its native `sessionID`:
+
+```sh
+opencode api post "/api/rpc/octg/create?$LOCATION" \
+  --data '{"input":{"id":"research","sessionID":"ses_your_existing_session","allowedUsers":["slack:U12345678"]}}'
+```
+
+Use one alternative, not both. `id` is the plugin's Agent Session name; names are lowercase and case-sensitive. `sessionID` identifies the native conversation in CLI/web. Registration preserves the existing session's native agent. Duplicate names, already-registered sessions, and child task sessions are rejected
+
+### Allowlist inspection and replacement
+
+List registered sessions, including their `id`, `sessionID`, `allowedUsers`, and conversation bindings:
+
+```sh
+opencode api post "/api/rpc/octg/list?$LOCATION" --data '{}'
+```
+
+Replace one session's allowlist:
+
+```sh
+opencode api post "/api/rpc/octg/allowlist?$LOCATION" \
+  --data '{"input":{"agentId":"research","users":["slack:U12345678","telegram:123"]}}'
+```
+
+**This replaces the entire allowlist, not appends to it.** Include every user you want to retain. At least one valid platform-prefixed user ID is required: `slack:<member-id>`, `telegram:<numeric-user-id>`, or `discord:<user-id>`. Use user IDs, not bot tokens, usernames, or channel IDs
+
+Changes take effect without a plugin restart. Bindings created by removed users are discarded; remaining bindings still check each sender's authorization. An allowlist authorizes a user but does not link a conversation: the user must send `/agent <session-name>` or `!agent <session-name>` afterward
+
+### Other management calls and access
+
+Session-scoped methods use `agentId`, for example:
+
+```sh
+opencode api post "/api/rpc/octg/status?$LOCATION" --data '{"input":{"agentId":"research"}}'
+```
+
+The [RPC contract](src/rpc.ts) also defines prompt admission, conversation linking, timers, interruption, retry, recovery cancellation, and native compaction. Typed clients can import it from `@notaunty/opencode-agent/rpc`
+
+Owner RPC calls do not require the owner to appear in a chat allowlist. Protect OpenCode's authenticated API access: anyone able to call these management methods can change chat access and prompt sessions. A chat allowlist is not an API authentication mechanism or a tool-permission sandbox
