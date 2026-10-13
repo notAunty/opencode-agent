@@ -1,0 +1,47 @@
+name: Publish package
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: publish-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: https://npm.pkg.github.com
+          scope: '@notaunty'
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - run: node --test .github/scripts/release.test.mjs
+      - name: Prepare release commit
+        id: release
+        run: node .github/scripts/release.mjs prepare
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish
+        if: steps.release.outputs.publish == 'true'
+        run: npm run publish:github
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag published source
+        run: node .github/scripts/release.mjs tag
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
