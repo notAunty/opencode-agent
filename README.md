@@ -8,7 +8,7 @@ For example, keep a `research` session and a `planning` session in the same proj
 
 ## Quick start
 
-Start with Telegram. You need OpenCode with a working model provider and a Telegram bot. Telegraf long polling needs neither Redis nor a public HTTPS endpoint
+Start with Telegram. You need OpenCode with a working model provider and a Telegram bot. Chat SDK long polling needs neither Redis nor a public HTTPS endpoint
 
 1. Install the plugin:
    ```sh
@@ -92,15 +92,18 @@ An already-running shared server cannot inherit a new client shell's environment
 
 ### Chat integrations
 
-Set `chat.enabled` to `true` and select platforms in `chat.platforms`. Telegram uses Telegraf long polling and Slack uses Socket Mode automatically; neither needs Redis or a public endpoint. Chat is disabled by default. Discord uses Chat SDK with `REDIS_URL` and a listener at `127.0.0.1:8787`
+Set `chat.enabled` to `true` and select platforms in `chat.platforms`. All platforms use the official Chat SDK adapters. Telegram uses explicit polling mode and Slack uses Socket Mode; neither needs Redis or a public endpoint. Chat is disabled by default. Selecting Discord requires `REDIS_URL` and opens its webhook listener at `127.0.0.1:8787`; Slack/Telegram-only configurations do not open a listener
+
+Run one project plugin instance per bot/project. Local SDK caches and locks are process-scoped, not a distributed backend; durable Agent Session links, authorization and inbox state remain in native plugin storage
 
 Expose Discord's webhook route through HTTPS and register it yourself. The plugin does not register or delete webhooks. Each sender must still be in the target Agent Session's allowlist
 
 #### Telegram
 
 - Enable `telegram` in `chat.platforms`
-- Telegraf long polling uses only `TELEGRAM_BOT_TOKEN`
+- Chat SDK polling uses only `TELEGRAM_BOT_TOKEN`; it resolves the bot username automatically
 - Polling uses outbound requests only, preserves existing webhooks, and stops gracefully with the plugin. Use one polling process per bot
+- Polling explicitly disables webhook deletion and pending-update dropping. The plugin refuses startup when an existing webhook is configured. Telegram polling offsets and fetched pending updates are checkpointed in native plugin storage when Redis is not in use; Agent Session authorization and durable admission remain authoritative
 - Startup publishes commands through [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands), replacing the default language-neutral menu. Registration does not alter webhooks or grant session access
 
 Authorize your numeric Telegram user ID before messaging the bot. From the agent project directory:
@@ -192,7 +195,13 @@ Recovery asks the agent to inspect unfinished task notes rather than replay the 
 
 ### Missing-message diagnostics
 
-Server logs emit JSON stages without message text, tokens, or raw error payloads. Follow `slack.received` → `slack.routing` → `chat.staged` → `native.admitted` → `native.context.observed`. Matching `ref` values correlate transport stages; `chat.staged` supplies the native message ID whose SHA-256 prefix is the native-stage `ref`
+Plugin logs emit JSON stages without message text, tokens, or raw SDK error payloads. Follow `slack.received` → `slack.routing` → `chat.staged` → `native.admitted` → `native.context.observed` (or `telegram.received` → `telegram.routing`). Matching `ref` values correlate transport stages; `chat.staged` supplies the native message ID whose SHA-256 prefix is the native-stage `ref`
+
+- `<platform>.starting` / `<platform>.ready`: adapter initialization started/completed; setup failure emits `chat.start.failed` and aborts plugin startup
+- `slack.connected` / `slack.disconnected`: SDK Socket Mode startup/shutdown reports; `slack.redelivery` reports a retried delivery
+- `slack.acknowledged` / `slack.ack.failed`: acknowledgement result; admission can still proceed after failure and durable deduplication handles redelivery
+- `telegram.polling.started` / `telegram.polling.stopped` and `<platform>.sdk.warn` / `<platform>.sdk.error`: sanitized adapter lifecycle/failure reports
+- `<platform>.active`: minute heartbeat from the running plugin, optionally with `lastReceivedAgoMs`. This confirms plugin liveness, **not** socket connectivity. The pinned Slack adapter owns automatic reconnects but exposes no public socket connection-state API; ready/heartbeat must not be interpreted as continuous connection health
 
 - `slack.filtered`: intentionally ignored event, with reason
 - `chat.routing.failed`: authorization, attachment, routing, or staging failure
@@ -202,6 +211,10 @@ Server logs emit JSON stages without message text, tokens, or raw error payloads
 - `native.assistant.completed` / `native.session.idle`: session execution signals, correlated by `sessionRef`; they do not establish completion of a particular input
 
 Native admission means queued, not executed. A queued message may not yet appear in active context. Missing context observation alone does not prove loss, especially after compaction. Do not resend message text with a new ID to diagnose an uncertain admission
+
+For a local Slack smoke test, keep tokens private, confirm Socket Mode and `message.im`/`app_mention` subscriptions, and run only one intended bot deployment while investigating. Start the project plugin with Slack selected, check `slack.ready`, DM `!agent <session-name>`, then `!status`. If neither produces `slack.received`, check the running project configuration, installed workspace, app-level `connections:write` token, subscriptions, scopes/reinstallation, and outbound WebSocket access. If reception is logged, inspect filtering/authorization stages before investigating model execution. SDK transport-level logs are separate from the plugin's sanitized logs; review and redact them before sharing
+
+If `slack.acknowledged` appears without `slack.received`, the event reached the adapter: inspect SDK warnings/errors, duplicate/self-message filtering and profile parsing before changing Slack subscriptions. Web API requests have a 10-second timeout and no SDK request retries; Socket Mode reconnection remains SDK-owned
 
 ## Permissions and limitations
 

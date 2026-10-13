@@ -31,7 +31,7 @@ export default Plugin.define({
   async setup(ctx) {
     const options = optionsSchema.parse(ctx.options)
     const directory = ctx.location.directory
-    const bridge = new Messaging(options.chat, await environment(directory, options.envFile))
+    const bridge = new Messaging(options.chat, await environment(directory, options.envFile), { storage: ctx.storage })
     const sessions: Sessions = {
       create: async input => ctx.session.create({ ...input, id: sid(input.id), agent: input.agent as Agent.ID }),
       get: async sessionID => {

@@ -3,6 +3,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, readFile, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { createServer } from "node:http"
+import { createDiscordAdapter } from "@chat-adapter/discord"
 import { Message, type Attachment, type Thread, type SlashCommandEvent } from "chat"
 import { ChatBridge, ChatRouter } from "../src/chat.js"
 import { AgentSessions } from "../src/service.js"
@@ -10,6 +12,7 @@ import { Timers } from "../src/timers.js"
 import { captureFile, uploadedFile } from "../src/transfers.js"
 import type { Json, Sessions } from "../src/contracts.js"
 import { chatCommands, registerTelegramCommands } from "../src/commands.js"
+import { localChatState } from "../src/chat-state.js"
 
 function message(userId: string, text: string, attachments: Attachment[] = []): Message {
   return new Message({ id: `message-${userId}-${text}`, threadId: "telegram:conversation", text,
@@ -49,6 +52,35 @@ test("Chat SDK messages require Agent Session authorization before downloading a
 test("disabled Chat bridge neither needs credentials nor opens network connections", async () => {
   const bridge = new ChatBridge({ enabled: false, host: "127.0.0.1", port: 8787, platforms: ["telegram", "slack", "discord"], discordGateway: false })
   await bridge.start(); await assert.rejects(bridge.post("telegram:any", "hello"), /disabled/); await bridge.stop()
+})
+test("Discord retains its webhook server; outbound-only platforms are not exposed as webhooks", async () => {
+  const reservation = createServer()
+  await new Promise<void>(resolve => reservation.listen(0, "127.0.0.1", resolve))
+  const port = (reservation.address() as { port: number }).port
+  await new Promise<void>(resolve => reservation.close(() => resolve()))
+  const discord = createDiscordAdapter({ botToken: "synthetic", applicationId: "synthetic", publicKey: "00".repeat(32) })
+  discord.initialize = async () => {}
+  const f = await fixture()
+  const bridge = new ChatBridge({ enabled: true, host: "127.0.0.1", port, platforms: ["discord"], discordGateway: false }, {}, {
+    state: localChatState(), adapters: () => ({ discord }),
+  })
+  bridge.attach(f.router)
+  try {
+    await bridge.start()
+    for (const platform of ["slack", "telegram", "discord"]) {
+      const response = await fetch(`http://127.0.0.1:${port}/chat/${platform}`, { method: "POST", body: "{}" })
+      assert.equal(response.status, platform === "discord" ? 401 : 404)
+    }
+  } finally { await bridge.stop() }
+})
+test("Discord still requires Redis in production while Slack and Telegram do not", async () => {
+  const f = await fixture()
+  const bridge = new ChatBridge({ enabled: true, host: "127.0.0.1", port: 8787, platforms: ["discord"], discordGateway: false }, {
+    DISCORD_BOT_TOKEN: "synthetic", DISCORD_APPLICATION_ID: "synthetic", DISCORD_PUBLIC_KEY: "00".repeat(32),
+  })
+  bridge.attach(f.router)
+  await assert.rejects(bridge.start(), /REDIS_URL/)
+  await bridge.stop()
 })
 test("native slash commands share authorization and timers across Telegram, Slack and Discord", async () => {
   for (const platform of ["telegram", "slack", "discord"]) {

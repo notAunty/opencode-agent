@@ -45,7 +45,7 @@ Requirements gathering used `openai/gpt-6.1-sol#medium`. The requirements review
 
 - Support the Chat SDK adapter ecosystem, with Telegram, Slack, and Discord as first-class integrations
 - Persistent self-hosted OpenCode service; no requirement for Vercel hosting
-- Separate messaging transports share authorization, commands, files, and replies. Telegram uses Telegraf long polling with automatic command registration; Slack uses the official Socket Mode and Web API libraries. Chat SDK adapters remain in the codebase, with Discord using the webhook bridge and optional Gateway
+- Messaging uses official Chat SDK adapters throughout: Telegram explicit polling with automatic command-menu registration, Slack Socket Mode, and Discord webhooks with optional Gateway. Slack/Telegram-only deployments use official in-memory SDK state plus native plugin storage for durable Telegram polling checkpoints; selecting Discord retains Redis
 - Durable Chat SDK state for webhook subscriptions, deduplication, and concurrency queues; Telegram and Slack need neither Redis nor a listener
 - Persist incoming work before waiting for a model; acknowledge webhooks independently of model execution
 - Reject unauthorized users before routing inputs or fetching attachments
@@ -112,12 +112,15 @@ V1 requirement inputs: `main:README.md`, `main:docs/background-agents.md`. Docum
 
 ## Operational limits
 
-- Chat SDK native slash handlers, Slack socket commands and Telegraf command handlers share command authorization and timer logic. Telegram menu publication is automatic; Slack and Discord require external command setup. No development run registers real commands
+- Chat SDK native slash handlers share command authorization and timer logic across all platforms. Telegram menu publication is automatic; Slack and Discord require external command setup. No development run registers real commands
 - Slack acknowledges socket envelopes before routing to satisfy the platform deadline. An acknowledged event may be lost if the process crashes before durable staging. The socket library reconnects transport connections; outgoing Web API retries are disabled so application outbox policy owns retries
 - A failed socket acknowledgement is logged but does not discard the received event; redelivery uses the same durable admission ID
 - State mutations use a short serial lock; native admission and outbound delivery run outside it, with separate dispatch/delivery serialization. New messages can be saved and admitted while outgoing posts are slow
 - JSON diagnostics distinguish receipt, filtering, authorization, staging, uncertain/confirmed admission, native context observation, and session execution signals without logging message bodies or credentials. Session execution signals do not prove a particular input completed
-- Telegraf polling checks for an existing webhook and refuses to replace it. It uses abortable `getUpdates` requests rather than `launch()`, which would delete deployment-owned webhook configuration. Offsets advance after update handling; native admission IDs and durable inbox state limit duplicate prompts on redelivery. This is not an exactly-once transport
+- Chat SDK polling checks for an existing webhook before initialization and refuses to replace it. Both `deleteWebhook` and `dropPendingUpdates` are explicitly false. SDK offsets, failed updates and buffered album parts use bot-scoped checkpoints; native plugin storage preserves these checkpoints without requiring Redis. Telegram admission keys retain the original message ID rather than the SDK's composite chat/message ID. Native admission IDs and durable inbox state limit duplicate prompts on redelivery. This is not an exactly-once transport
+- SDK subscriptions are not authorization or routing authority. Catch-all message routing consults durable Agent Session links, preserving owner-RPC links, Slack channel-wide fallback and Telegram topic links after restart. Discord's existing mention/subscription routing remains unchanged
+- Sanitized adapter lifecycle diagnostics and minute plugin heartbeats expose startup and handler failures. Slack's pinned SDK has no public connection-state hook; heartbeats indicate process liveness, not a healthy socket. Reconnect remains SDK-owned and never replays completed agent actions
+- A narrow Slack SDK subclass guards acknowledgement failures because pinned 4.41.1 awaits acknowledgements outside its socket-handler error catch. It supplies the SDK's `waitUntil` hook so shutdown drains async work, and preserves literal notice text through the SDK formatter without username resolution. All event decoding, routing, downloads, posting and reconnect behavior remain SDK-owned; durable Agent Session deduplication handles redelivery
 
 - The plugin runs while its OpenCode project location is active; minute timers are not an OS scheduler. Due timers are admitted on restart
 - One process owns a project scheduler. Plugin storage is durable but is not a cross-process transactional queue
